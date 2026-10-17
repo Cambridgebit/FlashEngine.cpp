@@ -1,0 +1,2 @@
+# 契约锁按原始字节计算哈希，跨 Windows/WSL 检出时固定文本换行。
+* text=auto eol=lf

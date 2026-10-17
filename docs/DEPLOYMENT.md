@@ -13,9 +13,9 @@
 
 运行 `flashengine-native capabilities` 查看二进制实际编译后端。一个 ELF 只链接一个设备运行时，不能用 `--backend` 把 CUDA 程序切成 CoreX/310P 程序。主机 preset 只能校验 bundle/tokenizer，不能进行 CPU 推理。x86_64 ELF 不能复制到 AArch64 直接运行；bundle 是架构无关的数据，可以复用。
 
-共同范围：Qwen3 dense / Qwen3 MoE，TP=1，greedy；DFlash1 固定 k、全词表、非因果全注意力。拒绝量化、TP>1、DSpark/EAGLE3、DFlash2、缩减词表、滑窗草稿与 Qwen3.5；Python 支持不代表原生已支持。
+0.4 增量见 [功能组合](FEATURE_COMBINATIONS.md)：Qwen3 dense/MoE 可组合 DFlash/EAGLE3，Qwen3.5 文本 dense/MoE 可组合 DFlash；Prefix 默认开启，可与这些草稿组合，使用状态门控/快照恢复。本轮为 310P 补充这些 profile 和 Quark 加载期反量化的 ACLNN 参考源码，并补齐公共 chunked-prefill 配置；**只改代码，没有构建/测试，原有二进制未更新**，见 [源码对齐说明](BACKEND_PARITY_SOURCE.md)。共同约束为 TP=1、greedy；DFlash1 固定 k、全词表、非因果全注意力。仍拒绝 TP>1、DSpark、DFlash2、Qwen3.5+EAGLE3、滑窗草稿和未实现的量化格式；Python 支持不代表原生已验收。
 
-CUDA/CoreX 当前使用 head_dim=128、fp16/bf16；310P 只接受 fp16。MoE 支持逐专家及融合 3D 权重、mixed dense/sparse 层、top-k 路由与归一化开关；不支持 shared expert。所有专家驻留设备，不提供专家卸载；30B 模型不能因只激活 3B 就按 3B 权重预算显存。
+Qwen3 CUDA FlashInfer 和 CoreX 共用模型层使用 head_dim=128；Qwen3.5 与 310P 使用独立参考 attention。计算为 fp16/bf16；310P 只接受 fp16，GDN SSM 采用 fp32。MoE 支持逐专家及融合 3D 权重、mixed dense/sparse 层、top-k 路由；Qwen3.5 另有门控 shared expert。所有专家驻留设备，不提供专家卸载；30B 模型不能因只激活 3B 就按 3B 权重预算显存。
 
 ## 2. 准备离线输入
 
@@ -132,7 +132,9 @@ FE_NATIVE=build/cuda/flashengine-native
   --max-num-partial-prefills 2 --kv-blocks 32 --graph --no-think
 ```
 
-初次真机验收先 `--eager`，普通路径通过后再 `--graph`，然后 DFlash eager → DFlash Graph。Graph 启动时捕获 1/2/4/8、16 步进和 `max_num_seqs` 尾桶；任一要求的桶失败即拒绝启动。普通 decode / draft / verify 分图，plan 和草稿上下文提交在图外；上下文尾部走单 token 路径是计划内行为。`--production` 仅禁止 eager 配置，不等于已获 production 资格。
+初次真机验收先 `--eager`，普通路径通过后再 `--graph`，然后 spec eager → spec Graph。CUDA/CoreX Qwen3 捕获 1/2/4/8、16 步进和 `max_num_seqs` 尾桶；Qwen3.5 与新 310P 参考路径的 target 使用固定单行顺序图，DFlash 草稿使用固定块图。任一要求的图失败即拒绝启动。plan、附属状态快照、接受/回滚和上下文提交在图外；上下文尾部走单 token 路径是计划内行为。`--production` 仅禁止 eager 配置，不等于已获 production 资格。
+
+Prefix 和分块预填充均默认开启；`--enable-chunked-prefill` / `--disable-chunked-prefill` 与 Python 对齐。`--max-num-batched-tokens` 是每步 prefill token 预算，`--max-num-partial-prefills` 限制持有状态的 partial prefill；它们计入 max_num_seqs。关闭分块时预算必须覆盖 max_model_len。workload JSON 的 `enable_chunked_prefill` 也会被实际读取。
 
 ```bash
 curl http://127.0.0.1:8000/health

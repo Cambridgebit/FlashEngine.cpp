@@ -22,7 +22,7 @@ std::map<std::string,WeightView> parse_safetensors(std::shared_ptr<MappedFile> f
   require(length<=100000000 && length<=file->size()-8,"safetensors header 越界");
   require(length>0&&file->data()[8]=='{',"safetensors header 必须以对象起始字符开头");auto header=parse_json(std::string(file->data()+8,length));require(header.is_object(),"header 必须为对象");
   std::map<std::string,WeightView> result;std::vector<std::pair<uint64_t,uint64_t>> spans;
-  const std::map<std::string,size_t> sizes{{"F16",2},{"BF16",2},{"F32",4},{"I64",8},{"BOOL",1}};
+  const std::map<std::string,size_t> sizes{{"F16",2},{"BF16",2},{"F32",4},{"I64",8},{"I8",1},{"BOOL",1}};
   for(auto it=header.begin();it!=header.end();++it){
     if(it.key()=="__metadata__"){require(it.value().is_object(),"safetensors metadata 必须为对象");for(auto& value:it.value())require(value.is_string(),"safetensors metadata 必须为字符串字典");continue;}
     auto& item=it.value();std::string dtype=item.at("dtype");
@@ -48,7 +48,7 @@ fs::path Bundle::path(const std::string& relative)const {
 }
 Bundle::Bundle(const fs::path& directory,bool verify_hashes):root(fs::canonical(directory)) {
   manifest=read_json(path("bundle.json"));
-  require((manifest.at("format_version")=="1.0.0"||manifest.at("format_version")=="1.1.0")&&compatible_contract(manifest.at("contract_version")),"不兼容的 bundle/contract 版本");
+  require((manifest.at("format_version")=="1.0.0"||manifest.at("format_version")=="1.1.0"||manifest.at("format_version")=="1.2.0"||manifest.at("format_version")=="1.3.0")&&compatible_contract(manifest.at("contract_version")),"不兼容的 bundle/contract 版本");
   for(auto it=manifest.at("files").begin();it!=manifest.at("files").end();++it){auto file=path(it.key());require(fs::file_size(file)==it.value().at("size").get<uint64_t>(),"bundle 文件大小不匹配："+it.key());if(verify_hashes)require(sha256(file)==it.value().at("sha256"),"bundle 哈希不匹配："+it.key());}
   for(auto name:{"engine/config.json","engine/weights.plan.json","tokenizer/tokenizer.json","tokenizer/runtime.json","tokenizer/chat_template.jinja","golden/tokenizer_chat.json"})require(manifest["files"].contains(name),"manifest 缺少必要文件");
   config=read_json(path("engine/config.json"));tokenizer_runtime=read_json(path("tokenizer/runtime.json"));validate_weights();
@@ -76,14 +76,34 @@ void Bundle::validate_weights(){
     auto mc=config.at(kind);require(mc.is_object(),"模型配置缺失");
     int64_t h=mc.at("hidden_size"),vocab=mc.at("vocab_size");auto expected=expected_model_weights(mc,kind=="draft");
     if(kind=="draft"){
+      auto method=mc.value("spec_method",std::string("dflash"));require(method=="dflash"||method=="eagle3","未实现的原生投机方法："+method);
+      bool eagle=method=="eagle3";if(eagle)require(!config["target"]["model_type"].get<std::string>().starts_with("qwen3_5"),"Qwen3.5 不支持 EAGLE3");
+      if(eagle){
+        auto ids=mc.at("aux_layers").get<std::vector<int>>();require(ids.size()==3,"EAGLE3 必须捕获三层 aux");std::set<int> unique;for(int id:ids)require(id>=0&&id<config["target"]["num_hidden_layers"].get<int>()&&unique.insert(id).second,"EAGLE3 aux 层非法");
+        require(h==config["target"]["hidden_size"].get<int64_t>()&&vocab==config["target"]["vocab_size"].get<int64_t>()&&mc.at("num_tokens").get<int>()>=1&&mc.at("num_tokens").get<int>()<=15,"EAGLE3 配置不匹配");
+      }else{
       auto ids=mc.at("target_layer_ids").get<std::vector<int>>();require(!ids.empty(),"草稿缺少 aux 层");
-      std::set<int> seen;for(auto id:ids)require(id>=0&&id+1<config["target"]["num_hidden_layers"].get<int>()&&seen.insert(id).second,"草稿 aux 层越界或重复");
+      bool hybrid=config["target"]["model_type"].get<std::string>().starts_with("qwen3_5");std::set<int> seen;for(auto id:ids)require(id>=0&&id+(hybrid?0:1)<config["target"]["num_hidden_layers"].get<int>()&&seen.insert(id).second,"草稿 aux 层越界或重复");
       require(h==config["target"]["hidden_size"].get<int64_t>()&&vocab==config["target"]["vocab_size"].get<int64_t>(),"草稿与目标维度不匹配");
       int64_t k=mc.at("num_tokens"),block=mc.at("block_size"),mask=mc.at("mask_token_id");
       require(k>0&&k<block&&mask>=0&&mask<vocab,"草稿 k/block/mask 配置非法");
+      }
     }
     for(auto& [name,shape]:expected)require(destination.contains(name)&&destination.at(name).shape==shape,"缺失或错误形状的权重："+name);
-    for(auto& [name,weight]:destination){require(weight.dtype=="F16"||weight.dtype=="BF16"||weight.dtype=="F32","非浮点模型权重");require(expected.contains(name)||((name=="embed_tokens.weight"||name=="lm_head.weight")&&weight.shape==std::vector<int64_t>{vocab,h}),"未知目标权重："+name);}
+    bool quant=mc.value("quantization",std::string())=="quark-int8-dequant-v1";
+    require(!mc.contains("quantization")||quant,"不支持的量化配置");
+    for(auto& [name,weight]:destination){
+      if(name=="d2t"&&kind=="draft"&&mc.value("spec_method",std::string())=="eagle3"){
+        require(weight.dtype=="I64","EAGLE3 d2t 必须为 int64");auto ptr=static_cast<const unsigned char*>(weight.data());
+        for(int64_t i=0;i<weight.shape.at(0);++i){int64_t delta;std::memcpy(&delta,ptr+i*8,8);require(delta>=-i&&delta<vocab-i,"EAGLE3 d2t 映射越界");}continue;
+      }
+      auto dot=name.rfind('.');auto base=dot==std::string::npos?std::string():name.substr(0,dot)+".weight";
+      bool companion=name.ends_with(".weight_scale")||name.ends_with(".weight_zero_point");
+      if(companion){require(quant&&destination.contains(base)&&destination.at(base).dtype=="I8"&&expected.contains(base)&&expected.at(base).size()==2,"孤立量化参数");auto rows=expected.at(base)[0];require((weight.shape==std::vector<int64_t>{rows}||weight.shape==std::vector<int64_t>{rows,1})&&(weight.dtype=="F16"||weight.dtype=="BF16"||weight.dtype=="F32"||weight.dtype=="I8"),"量化参数形状/类型错误");continue;}
+      bool integer=weight.dtype=="I8";require(weight.dtype=="F16"||weight.dtype=="BF16"||weight.dtype=="F32"||(integer&&quant&&weight.shape.size()==2&&name.ends_with(".weight")),"非法模型权重类型");
+      require(expected.contains(name)||((name=="embed_tokens.weight"||name=="lm_head.weight")&&weight.shape==std::vector<int64_t>{vocab,h}),"未知目标权重："+name);
+      if(integer)require(destination.contains(name.substr(0,name.size()-7)+".weight_scale"),"int8 权重缺少 scale");
+    }
   }
 }
 }

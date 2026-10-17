@@ -9,6 +9,7 @@
 
 int main(int argc,char** argv){try{
   int count=0;auto check=[&](bool ok){fe::require(ok,"主机断言失败 #"+std::to_string(count));++count;};
+  fe::Config defaults;check(defaults.enable_prefix_cache);defaults.spec_num_tokens=2;defaults.validate();check(defaults.json()["enable_prefix_cache"]==true);
   check(fe::graph_buckets(7)==std::vector<int64_t>({1,2,4,7}));
   check(fe::parse_integer("2048")==2048&&fe::parse_integer("-1")==-1);
   for(auto text:{"","8x"," 8","1.0","9223372036854775808"}){bool failed=false;try{fe::parse_integer(text);}catch(...){failed=true;}check(failed);}
@@ -30,6 +31,19 @@ int main(int argc,char** argv){try{
   bool rejected=false;try{fe::parse_json("{\"a\":1,\"a\":2}");}catch(...){rejected=true;}check(rejected);
   if(argc==2){fe::fs::path root=argv[1];auto lock=fe::read_json(root/"contracts.lock");check(lock["contract_version"]==fe::contract_version);for(auto it=lock["files"].begin();it!=lock["files"].end();++it)check(fe::sha256(root/lock.value("directory",std::string("vendor/contracts"))/it.key())==it.value());}
   fe::BlockManager blocks(2,16);fe::Sequence a(1,{1},10),b(2,{2},10);check(blocks.ensure(a,17));check(!blocks.ensure(b,1));check(b.blocks.empty());blocks.release(a);check(blocks.used()==0);check(blocks.ensure(b,1));blocks.release(b);
+  // 完整页按累计 token 匹配，尾 token 重算；并发引用不得被驱逐或改写。
+  fe::BlockManager cache(4,16,true);fe::Sequence first(101,std::vector<int64_t>(33,7),2),same(102,std::vector<int64_t>(33,7),2),different(103,std::vector<int64_t>(33,7),2);
+  check(cache.ensure(first,33));cache.publish(first,32);cache.probe(same);check(same.cached==32&&same.blocks.size()==2&&same.blocks[0]==first.blocks[0]);check(cache.ensure(same,33));
+  different.tokens[1]=9;cache.probe(different);check(different.cached==0);cache.release(first);check(cache.used()==3);cache.release(same);check(cache.used()==0&&cache.snapshot()["prefix_resident_blocks"]==2);
+  cache.probe(same);check(cache.snapshot()["prefix_hit_requests"]==1);cache.release(same);
+  fe::Sequence exact(104,std::vector<int64_t>(32,7),2);cache.probe(exact);check(exact.cached==16&&exact.blocks.size()==1);cache.release(exact);
+  check(cache.ensure(different,64));check(cache.snapshot()["prefix_resident_blocks"]==0&&cache.snapshot()["prefix_evictions"]==2);cache.release(different);
+  fe::Sequence stale(105,std::vector<int64_t>(33,7),2);cache.probe(stale);check(stale.cached==0&&cache.used()==0);
+  // 只有附属状态完整才发布/命中；缺失时安全 miss，不关闭总开关。
+  fe::BlockManager guarded(2,16,true);bool ready=false;int evicted=0;guarded.prefix_ready=[&](const std::vector<int64_t>&){return ready;};guarded.on_evict=[&](const std::vector<int64_t>&){++evicted;};
+  fe::Sequence source(201,std::vector<int64_t>(17,7),1);check(guarded.ensure(source,17));guarded.publish(source,16);check(guarded.snapshot()["prefix_resident_blocks"]==0);ready=true;guarded.publish(source,16);guarded.release(source);
+  ready=false;fe::Sequence missing(202,std::vector<int64_t>(17,7),1);guarded.probe(missing);check(missing.cached==0);ready=true;fe::Sequence restored(203,std::vector<int64_t>(17,7),1);guarded.probe(restored);check(restored.cached==16);guarded.release(restored);
+  fe::Sequence replace(204,std::vector<int64_t>(32,8),1);check(guarded.ensure(replace,32)&&evicted==1);guarded.release(replace);
   fe::Config config;config.max_model_len=64;config.max_num_seqs=2;config.max_num_batched_tokens=3;config.num_kvcache_blocks=4;config.kvcache_block_size=16;fe::Scheduler sched(config);
   auto s=std::make_shared<fe::Sequence>(1,std::vector<int64_t>{1,2,3,4,5},2);sched.add(s);
   auto batch=sched.schedule();check(batch.prefill&&s->scheduled==3);s->cached+=s->scheduled;

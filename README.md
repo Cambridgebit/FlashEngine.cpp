@@ -4,6 +4,8 @@
 
 ## 已实现与未验收
 
+0.4 增加目标/投机组合与默认 Prefix：Qwen3 dense/MoE + DFlash/EAGLE3，Qwen3.5 文本 dense/MoE + DFlash；各组合可使用 Prefix。状态快照、Graph 形态、打包与限制见 [功能组合](docs/FEATURE_COMBINATIONS.md)。本轮新增 310P 的对应参考执行及 Quark 加载期反量化，补齐三后端公共 chunked-prefill 配置和观测。**本轮按要求仅改源码，没有构建/测试，既有二进制未更新**；详见 [源码对齐说明](docs/BACKEND_PARITY_SOURCE.md)。CoreX/310P 仍无 SDK/真机报告。
+
 已实现 Linux 原生 bundle/safetensors loader、Qwen byte-level BPE（PCRE2 + ICU NFC）、Minja chat template、主机调度器、Paged KV、chunked prefill、抢占/取消、Qwen3 dense/MoE CUDA eager/Graph、DFlash1 多图路径以及 Boost.Beast HTTP/SSE。MoE 支持逐专家和融合 3D 权重、mixed dense/sparse 层及 top-k 路由。
 
 CoreX 厂商 LibTorch C++ 后端和 AscendCL/ACLNN/ACL Graph 后端已准备源码及 CMake 接口，但没有 SDK/真机，尚未编译验收。CoreX 使用固定形状 ATen 参考 attention，310P 使用 ACLNN ND 参考 attention；ixformer 原生高性能路径、ATB/NZ 优化仍未完成。实测范围和失败项见 [验收记录](docs/VALIDATION.md)。DFlash 的最终 token 一致不等于逐轮 trace 通过；合成 MoE 的严格 trace 通过也不替代真实模型验收。没有任何后端获得 production 资格。
@@ -46,7 +48,7 @@ CUDA kernel 是预编译代码，不调用 Python、Triton 或 Python JIT。开�
 
 ## 运行
 
-部署 bundle 由 Python 仓的 `scripts.export_bundle` 生成；`verify` 校验哈希、权重计划和 tokenizer/chat golden，失败拒绝启动。当前 CUDA/CoreX 仅编译 head_dim=128、TP=1、Qwen3 dense/MoE、fp16/bf16、greedy；310P 仅 fp16。DFlash1 只接受全词表、非因果全注意力。
+部署 bundle 由 Python 仓的 `scripts.export_bundle` 生成；`verify` 校验哈希、权重计划和 tokenizer/chat golden，失败拒绝启动。Qwen3 CUDA FlashInfer 和 CoreX 共用模型层目前要求 head_dim=128；Qwen3.5 和 310P 使用独立参考 attention。共同约束为 TP=1、fp16/bf16、greedy；310P 仅 fp16。DFlash1 只接受全词表、非因果全注意力。EAGLE3 支持 d2t 缩减词表映射。
 
 ```bash
 build/cuda/flashengine-native --help
@@ -63,7 +65,9 @@ build/cuda/flashengine-native replay /path/to/bundle \
   --max-num-seqs 1 --kv-blocks 8 --eager --logits
 ```
 
-`--eager` 是开发默认；`--graph` 在启动时捕获全部配置桶（1/2/4/8、16 步进及尾桶），失败拒绝启动，不静默降级。`--production` 只是严格 Graph 配置，不授予发布资格。KV 池必须至少容纳一条完整上下文；额外一页仅供图 padding，不分配给请求。
+`--eager` 是开发默认；CUDA/CoreX Qwen3 的 `--graph` 在启动时捕获全部配置桶（1/2/4/8、16 步进及尾桶）。Qwen3.5 及新 310P 参考执行捕获单行 target 图并顺序回放，DFlash 草稿为固定块图；不冒充融合批量 verify。捕获失败拒绝启动，不静默降级。`--production` 只是严格 Graph 配置，不授予发布资格。KV 池必须至少容纳一条完整上下文；额外一页仅供图 padding，不分配给请求。
+
+Prefix 与 chunked prefill 均默认开启。分块配置使用 `--max-num-batched-tokens`、`--max-num-partial-prefills`；新增 `--enable-chunked-prefill` / `--disable-chunked-prefill` 与 Python 对齐。workload 同名字段也生效；关闭分块时预算必须覆盖 max_model_len。
 
 接口：`/health`、`/v1/models`、`/v1/completions`、`/v1/chat/completions`、`/v1/stats`、`/metrics`（别名 `/v1/metrics`）。设置 `--api-key` 后 `/v1/*` 要求 Bearer key；`/health`、`/metrics` 不鉴权，必须通过网络边界保护。未知字段、非 greedy、`n!=1` 明确 400。没有 WebUI。
 
@@ -71,6 +75,6 @@ build/cuda/flashengine-native replay /path/to/bundle \
 
 ## 维护
 
-契约当前为 0.2.0，`contracts.lock.directory` 指向 `vendor/contracts-0.2.0`；保留旧 0.1 快照及历史 lock，可读取 0.1 dense bundle。快照只能通过 Python 发布工具更新；主机测试校验哈希。源码分层为 `engine/scheduler → DeviceModel → cuda_model/ascend_model → 原生算子`，CLI/HTTP 和公共调度不包含 ATen/CUDA/ACL 类型。
+契约当前为 0.4.0，`contracts.lock.directory` 指向 `vendor/contracts-0.4.0`；保留旧快照及历史 lock，可读取 0.1/0.2/0.3 bundle。快照只能通过 Python 发布工具更新；主机测试校验哈希。源码分层为 `engine/scheduler → DeviceModel → cuda_model/hybrid_model/ascend_model → 原生算子`，CLI/HTTP 和公共调度不包含 ATen/CUDA/ACL 类型。
 
 流程保持：Python 实验 → 契约冻结 → golden → C++ 转译 → 每后端独立验收。不要把仅能编译、仅最终 token 相同、仅成功捕获 Graph，写成阶段验收完成。

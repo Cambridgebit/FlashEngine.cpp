@@ -30,6 +30,17 @@ int main(){try{
   {
     fe::Engine engine(config(),std::make_unique<FakeModel>());auto handle=engine.submit({{1},100},[](fe::OutputEvent){});handle.cancel();handle.cancel();engine.stop();engine.stop();
   }
+  {
+    auto c=config();c.enable_prefix_cache=true;done=0;
+    fe::Engine engine(c,std::make_unique<FakeModel>());
+    auto sink=[&](fe::OutputEvent e){if(e.finished){std::lock_guard lock(mutex);++done;cv.notify_all();}};
+    engine.submit({std::vector<int64_t>(33,2),1},sink);
+    {std::unique_lock lock(mutex);fe::require(cv.wait_for(lock,std::chrono::seconds(5),[&]{return done==1;}),"冷前缀请求未完成");}
+    engine.submit({std::vector<int64_t>(33,2),1},sink);
+    {std::unique_lock lock(mutex);fe::require(cv.wait_for(lock,std::chrono::seconds(5),[&]{return done==2;}),"热前缀请求未完成");}
+    engine.stop();auto snapshot=engine.runtime_snapshot();auto metrics=snapshot.at("metrics");
+    fe::require(metrics.at("flashengine_prefix_hit_requests_total")==1&&metrics.at("flashengine_prefix_cached_blocks_total")==2&&metrics.at("flashengine_kv_used_blocks")==0,"前缀快照/页引用计数错误");
+  }
   // 引擎异常必须跨进程验证，以免测试进程被正常策略终止。
   pid_t child=fork();fe::require(child>=0,"fork 失败");
   if(child==0){fe::Engine engine(config(),std::make_unique<FakeModel>(true));engine.submit({{1},2},[](fe::OutputEvent){});std::this_thread::sleep_for(std::chrono::seconds(3));std::_Exit(99);}

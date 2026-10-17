@@ -17,7 +17,7 @@ JSON 输出位于 stdout；日志位于 stderr。`--eager` 关闭图，`--trace-
 
 在对应 Python oracle 仓运行 `scripts.make_native_workload` 冻结输入，`scripts.run_native_benchmark` 顺序调度 ABBA 两轮，`scripts.audit_native_benchmark` 检查配置、SHA256 与测量期 Graph。HTTP 使用 respect-eos 的独立 workload 及 `scripts.run_native_http_benchmark` / `scripts.audit_native_http_benchmark`；SSE chunk 数不是 token 数。
 
-完整命令和当前实测表位于 Python 仓 `docs/BENCHMARK_NATIVE.md`。本地两仓布局是父仓 `FlashEngine/` 和独立 `FlashEngine/flashengine-cpp/`；分开发版后需从与契约锁匹配的 oracle 版本取得离线工具。
+完整命令和当前实测表位于 Python 仓 `docs/BENCHMARK_NATIVE.md`。本地两仓布局是同级 `FlashEngine/` 与 `FlashEngine.cpp/`；分开发版后需从与契约锁匹配的 oracle 版本取得离线工具。
 
 ## 当前严格边界
 

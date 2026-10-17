@@ -9,7 +9,7 @@
 namespace fe {
 using Json = nlohmann::ordered_json;
 namespace fs = std::filesystem;
-inline constexpr const char* contract_version = "0.2.0";
+inline constexpr const char* contract_version = "0.4.0";
 struct InputError : std::runtime_error { using std::runtime_error::runtime_error; };
 void require(bool condition, const std::string& message);
 Json parse_json(const std::string& text);
@@ -25,7 +25,8 @@ struct Config {
   int64_t eos=-1;
   int64_t spec_num_tokens=0;
   bool enable_chunked_prefill=true, enforce_eager=true, production=false;
-  bool trace_logits=false;
+  bool trace_logits=false, enable_prefix_cache=true;
+  int64_t recurrent_prefix_cache_bytes=256LL*1024*1024;
   std::string dtype="bfloat16", backend="cuda";
   void validate() const;
   Json json() const;

@@ -9,8 +9,10 @@ struct Engine::State {
   Seq seq;Sink sink;size_t emitted=0;Clock::time_point submitted=Clock::now();std::optional<Clock::time_point> started;double ttft=-1;
 };
 Engine::Engine(Config config,std::unique_ptr<DeviceModel> model):config_(std::move(config)),model_(std::move(model)),scheduler_(config_){
-  scheduler_.on_release=[this](uint64_t id){model_->drop(id);};
+  bind_model(scheduler_,*model_);
   for(auto name:{"generated_tokens_total","engine_steps_total","prefill_steps_total","decode_steps_total","scheduler_preemptions_total","spec_rounds_total","spec_committed_tokens_total","prefix_requests_total","prefix_hit_requests_total","prefix_cached_blocks_total","prefix_new_blocks_total","cancelled_requests_total","requests_total","ttft_seconds_sum","ttft_seconds_count"})metrics_[std::string("flashengine_")+name]=0;
+  metrics_["flashengine_spec_draft_tokens_total"]=0;metrics_["flashengine_spec_accepted_tokens_total"]=0;
+  for(int p=1;p<=config_.spec_num_tokens;++p){auto key="flashengine_spec_position_"+std::to_string(p);metrics_[key+"_proposed_total"]=0;metrics_[key+"_accepted_total"]=0;}
   metrics_["flashengine_engine_busy_seconds_total"]=0.;metrics_["flashengine_graph_fallbacks_total"]=0;refresh();std::cerr<<"[INFO ] resolved_config="<<config_.json().dump()<<'\n';driver_=std::thread([this]{loop();});
 }
 Engine::~Engine(){stop();}
@@ -30,8 +32,13 @@ void Engine::refresh(){
   metrics_["flashengine_running_requests"]=sched["running"];metrics_["flashengine_waiting_requests"]=sched["waiting"];metrics_["flashengine_active_requests"]=sched["active"];
   metrics_["flashengine_kv_blocks_used"]=sched["used_blocks"];metrics_["flashengine_kv_blocks_total"]=sched["total_blocks"];metrics_["flashengine_scheduler_preemptions_total"]=sched["preemptions"];
   metrics_["flashengine_kv_used_blocks"]=sched["used_blocks"];metrics_["flashengine_kv_total_blocks"]=sched["total_blocks"];
+  for(std::string name:{"prefix_requests","prefix_hit_requests","prefix_cached_blocks","prefix_new_blocks"})metrics_["flashengine_"+name+"_total"]=sched[name];
+  metrics_["flashengine_prefix_resident_blocks"]=sched["prefix_resident_blocks"];metrics_["flashengine_prefix_evictions_total"]=sched["prefix_evictions"];
+  metrics_["flashengine_partial_prefill_requests"]=sched["partial_prefills"];
+  for(std::string name:{"steps","prefill_steps","decode_steps","prefill_tokens","decode_tokens","chunked_prefill_steps","admitted_requests"})metrics_["flashengine_scheduler_"+name+"_total"]=sched[name];
+  if(runtime.contains("prefix_state")){auto& state=runtime["prefix_state"];for(std::string name:{"saved","restored","evicted"})metrics_["flashengine_prefix_state_"+name+"_total"]=state.value(name,uint64_t(0));metrics_["flashengine_prefix_state_bytes"]=state.value("bytes",uint64_t(0));metrics_["flashengine_prefix_state_entries"]=state.value("entries",uint64_t(0));}
   for(std::string kind:{"decode","draft","verify"})metrics_["flashengine_"+kind+"_graph_replays_total"]=runtime.value(kind+"_graph_replays",uint64_t(0));
-  auto info=config_.json();info["engine_version"]="0.2.0";info["contract_version"]=contract_version;info["maturity"]="candidate";info["runtime"]=runtime;
+  auto info=config_.json();info["engine_version"]="0.4.0";info["contract_version"]=contract_version;info["maturity"]="candidate";info["implementation_revision"]="backend-parity-source-2026-10-17";info["implementation_status"]="unvalidated-source-changes";info["runtime"]=runtime;
   snapshot_={{"info",info},{"metrics",metrics_},{"requests",recent_}};
 }
 void Engine::emit(const std::shared_ptr<State>& state){
@@ -53,7 +60,7 @@ void Engine::loop(){
       auto batch=scheduler_.schedule();if(batch.sequences.empty())continue;auto start=Clock::now();for(auto& seq:batch.sequences){auto& state=states_.at(seq->id);if(!state->started){state->started=start;std::cerr<<"[REQ  ] rid="<<seq->id<<" wait="<<std::chrono::duration<double>(start-state->submitted).count()<<'\n';}}auto result=model_->run(batch);double seconds=std::chrono::duration<double>(Clock::now()-start).count();
       metrics_["flashengine_engine_steps_total"]=metrics_["flashengine_engine_steps_total"].get<uint64_t>()+1;metrics_["flashengine_engine_busy_seconds_total"]=metrics_["flashengine_engine_busy_seconds_total"].get<double>()+seconds;
       auto key=batch.prefill?"flashengine_prefill_steps_total":"flashengine_decode_steps_total";metrics_[key]=metrics_[key].get<uint64_t>()+1;
-      for(auto& round:result.rounds){metrics_["flashengine_spec_rounds_total"]=metrics_["flashengine_spec_rounds_total"].get<uint64_t>()+1;metrics_["flashengine_spec_committed_tokens_total"]=metrics_["flashengine_spec_committed_tokens_total"].get<uint64_t>()+round.at("committed_ids").size();}
+      for(auto& round:result.rounds){metrics_["flashengine_spec_rounds_total"]=metrics_["flashengine_spec_rounds_total"].get<uint64_t>()+1;metrics_["flashengine_spec_committed_tokens_total"]=metrics_["flashengine_spec_committed_tokens_total"].get<uint64_t>()+round.at("committed_ids").size();auto proposed=round.at("draft_ids").size(),accepted=round.at("accepted_count").get<size_t>();require(accepted<=proposed,"投机接受计数非法");for(size_t p=0;p<proposed;++p){auto key="flashengine_spec_position_"+std::to_string(p+1);metrics_[key+"_proposed_total"]=metrics_.value(key+"_proposed_total",uint64_t(0))+1;metrics_[key+"_accepted_total"]=metrics_.value(key+"_accepted_total",uint64_t(0))+(p<accepted?1:0);}metrics_["flashengine_spec_draft_tokens_total"]=metrics_.value("flashengine_spec_draft_tokens_total",uint64_t(0))+proposed;metrics_["flashengine_spec_accepted_tokens_total"]=metrics_.value("flashengine_spec_accepted_tokens_total",uint64_t(0))+accepted;}
       for(size_t i=0;i<batch.sequences.size();++i){auto s=batch.sequences[i];if(batch.prefill)s->cached+=s->scheduled;scheduler_.commit(s,result.tokens.at(i));if(s->status!=Status::finished&&!result.tokens[i].empty())s->cached=s->tokens.size()-1;s->scheduled=0;emit(states_.at(s->id));if(s->status==Status::finished)states_.erase(s->id);}
       {std::lock_guard lock(mutex_);refresh();}
     }

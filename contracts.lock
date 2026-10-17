@@ -1,14 +1,14 @@
 {
-  "artifact": "flashengine-contracts-0.2.0.tar.gz",
-  "artifact_sha256": "8245808a803936ea541fa81343cf05cb894f55817e57f9cd4c3e5534ae736d59",
-  "contract_version": "0.2.0",
-  "directory": "vendor/contracts-0.2.0",
+  "artifact": "contracts-0.4.0-v1.tar.gz",
+  "artifact_sha256": "877cb3a561288fd9fec405b2b06a459e7898e2804b3d312ba8107fc266fbe199",
+  "contract_version": "0.4.0",
+  "directory": "vendor/contracts-0.4.0",
   "files": {
-    "catalog.json": "eb788b29cc233a620ee399fe044d230241cef899d9814c5f1e794c2d74c1e143",
-    "engine-config.schema.json": "6c2defd968e956219bd109c7f2729eb2ef4d8c92102953bd1e8fbd5da9e479a3",
+    "catalog.json": "61e7142054a1b1ade38107e2fac7fc81e74956bd8bf6876c1439dfa5d35eb053",
+    "engine-config.schema.json": "8d609e10ee6e5b093a02d293298a0d5858ddfcd1e4f5c0f4cb5c2cc5f11e0e8e",
     "openai-subset.json": "60f5bf1a77fb87b2cbd87e18d1ad4c391535609512c0ca6b006c07e74965d49a",
-    "telemetry.json": "776e115d113d9339f77c0995cf7bef8623f14af7c130e9fc6e17ef991973e906",
-    "trace.schema.json": "d474fd8e30cfc89ee0be68feb6ace78f8400db65b61c69377a881f432dd3fab8"
+    "telemetry.json": "f210bda1ba449001c3a65d4802111f189b2901be6a9a189033a14cdd42f78832",
+    "trace.schema.json": "8340db2162dc3367f567658e98968abcb97bf97b0f286c6357d7889f28a2709f"
   },
   "oracle_git_sha": "17f1a4b792fecac48d6aaa7962533dd52f595368"
 }

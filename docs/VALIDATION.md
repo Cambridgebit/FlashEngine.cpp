@@ -1,5 +1,7 @@
 # 本机验收记录（2026-10-16，candidate）
 
+**后续源码状态（2026-10-17）**：用户要求仅修改 CoreX/310P 对齐及公共调度代码，不运行构建/测试。本轮新增 310P Qwen3.5/EAGLE3/Quark 参考路径、chunked-prefill 配置与观测，见 [源码对齐说明](BACKEND_PARITY_SOURCE.md)。本文件以下报告全部属于历史二进制；不能作为新源码的编译、行为、Graph 或性能通过证据。没有产生本轮测试报告，也没有更新 build 内二进制。
+
 这是一份阶段记录，不是发布合格证。CUDA 尚未通过全部 P1–P4 门禁。下文 2026-10-16 为历史记录；2026-10-17 多后端/MoE 增量见文末，不能用新增合成样例覆盖既有失败。P5/P6 不得标为完成。
 
 ## 环境与可追溯工件
@@ -120,3 +122,89 @@ CoreX 新增厂商 LibTorch C++ / ATen / Graph 的构建入口；310P 新增纯 
 | `native-build-cuda-benchmark-v1.json` | `8284690313fd829a346f592558c13bbe0555ce4b3c0e0f65228fb788f7d6fad7` |
 
 短输出与合成边界通过不覆盖真实长输出、BF16 和训练草稿 trace 的失败。全部后端仍 candidate。
+
+## 2026-10-17：0.3 Prefix / EAGLE3 / Qwen3.5 / Quark 增量
+
+功能与组合边界见 [0.3 功能说明](FEATURES_0_3.md)。契约 0.3.0 / bundle 1.2.0；发布归档 SHA256 为 `0399c756257ab80867b04cc074435bd54dcf49b1c993fc472c1e34be82bb8cc9`。快照来自 Python 发布器，保留旧版；CRLF 造成的首次 hash 测试失败已经通过恢复发布器原始字节修复，失败日志没有覆盖。
+
+- Python host unittest 25/25；最终 CUDA CTest 3/3，重建后的 ASan/UBSan 主机 CTest 2/2。消毒器测试不是设备内存检查。
+- 高 margin 合成夹具 v2 的 Python/C++ 26 组比较通过。阶段二进制 v3 另跑 8 个 profile、16 个 native worker、12 组严格比较，全部通过；包含普通/Prefix ON/OFF、EAGLE3 逐轮、Quark/显式反量化参考、Qwen3.5 dense/MoE eager/Graph。该夹具使用常量主导 token，后来未能检出真实 Qwen3.5 的陈旧 Graph 输出，不能作为该路径完整正确性证据。
+- 阶段二进制 SHA256：`e0cfeac971028437189cf2b6d1b6df7538cb2a10094ebd668a91fbbf837b6681`。合成 EAGLE3 的 draft/verify Graph 分别回放 44/22 次；结束后 EAGLE/GDN 状态与 KV 活动引用归零。
+- Prefix 小池压力覆盖完整/不完整前缀、共享、真实抢占与驱逐，ON/OFF、eager/Graph 严格一致；cache-on Graph 观察到 22 次抢占、49 次驱逐、5 个命中请求，结束后活动 KV 引用为零。缓存驻留页不计为活动引用。
+- EAGLE3 上下文尾部覆盖 prompt 长度 60/61/62/63、窗口 64，按剩余空间输出 4/3/2/1 个 token；eager/Graph 最终 token、完成原因和逐轮 trace 一致。修正了 refill 之后单 token 路径复用多行 metadata 的问题。
+- Quark 设备加载数值检查 56 项、1,310,720 元素通过；独立 CPU 标量公式对照 FP16/BF16 加载结果。这仅证明 `(q-zp)*scale` 的加载期转换，不证明 int8 GEMM 或显存节省。
+- 构建证据保存源文件、契约、ELF 和动态库哈希；未发现 libpython/libtorch_python/librust 动态依赖。它不是完整供应链或静态依赖审计。
+- 真实 Qwen3-0.6B 用同一小池压力脚本再次验证 Prefix ON/OFF、eager/Graph，10 个请求输出逐 token 一致，包含抢占/驱逐/恢复；`real-prefix-pressure-v1/` 保留输入、结果和进程日志。该 summary 只含比较结果，因此可能与合成报告同哈希；模型来源以对应 workload、bundle 哈希及 process 命令为准。
+- Compute Sanitizer 对 EAGLE3 合成尾部 batch=4 Graph 检查通过，`ERROR SUMMARY: 0 errors`。只覆盖该命令路径，不代替全形状内存或 racecheck 验收。
+- 真实 Qwen3-1.7B + 官方 EAGLE3（转换后的 safetensors、k=2）三条 ×8 输出：两端最终 token 相同，各自 eager/Graph 标签下结果一致，但 Python/C++ 逐轮提案/verify **严格失败**，例如第二轮 `[10,18]` 对 `[10,10]`。Python 源码的 eager carry 在 refill 读回后被 bootstrap 值覆盖，而原生保留 refill carry；这是状态语义差异的定位线索，不是所有差异已豁免的结论。
+- 真实 EAGLE3 的 Python Graph 因 `CUDA Graph decode requires cumulative KV-length metadata` 捕获失败、回退 eager，测量 replay=0；原生 draft/verify replay=34/17。审计明确失败，没有将带 `--graph` 标签的 Python worker 当成成功图执行。
+- 修正离线 trace 记录器：EAGLE3 的 `drafted_ids[0]` 已在 refill 被覆盖，改从接受时的 `d_pad` 读取，新增 greedy 提案/verify/提交自洽性断言。旧 `real-eagle17-v1` 失败现场保留；修正后 `v2` 仍失败，因此没有用记录器修复掩盖状态差异。
+- 真实 Qwen3.5-2B 首轮 eager 对 Python 三条 ×8 token 全同，但原生 Graph 重复首 token、模式一致性失败。定位为 eager prefill 重绑输出 Tensor、Graph 仍写旧地址；修复为固定 logits/output 缓冲。`real-qwen35-v1` 失败报告保留，夹具生成器也增加了非恒定 52/53 输出，防止常量样例再次掩盖此类错误。
+- 修复后最终二进制 SHA256 为 `822bab0f0ccace10a660df4543f5ac4532723e35745004b34a8537a1187c5c78`。真实 Qwen3.5-2B FP16、batch=1、三条 ×8 token，在 Python/C++、eager/Graph 间严格一致；配置/哈希/测量期 Graph 审计通过，原生 replay=21。它只覆盖这组短输出，不证明 BF16、长上下文、训练 MoE 或多行批次图。
+- 新版非恒定 hybrid dense/MoE 夹具，每 profile 的 eager/Graph 各 10 个请求，输出交替 52/53；Python/C++ 加模式内共 6 组比较通过，原生两种 profile 的 decode Graph 各 replay=70，GDN 状态与活动 KV 归零。该回归可检出旧 Graph 输出缓冲错误，仍不是训练模型质量证据。
+- 最终构建上的真实 Qwen3-0.6B Prefix 小池复测 `real-prefix-pressure-v2` 通过，summary 增加 bundle/各结果哈希，避免只看布尔比较报告混淆模型来源。Qwen3.5 MoE 非恒定夹具 batch=4 Graph 的 Compute Sanitizer memcheck 为 0 errors。
+- EAGLE3 合成 BF16 Graph 的 HTTP/SSE 测试 27 项通过，覆盖并发、文本 stop、非法请求、断连取消及正常停机；draft/verify Graph replay=80/40，结束后 eagle_active_requests、KV 引用与队列归零，退出码 0。它不证明真实训练草稿 trace 或 EAGLE3 抢占全矩阵通过。
+- 既有融合专家 MoE+DFlash 的最终构建回归通过：三条 prompt 长度 1/17/33，budget=8、k=2、FP16，部分接受后 bonus=EOS；两端 eager/Graph 的最终 token、轮次及完成原因严格相同，配置/哈希/Graph 审计通过，原生 draft/verify 各 replay=3。该小回归不替代旧版更大矩阵，也不能豁免训练模型差异。
+
+独立归档的新增工件（Python 仓忽略目录 `deployment_output/`）：
+
+| 工件 | SHA256 |
+|---|---|
+| `profiles-check-v2/summary.json` | `1b566eba92ffe0a9acbda7637a56451d43031c5fcf9a1e858dbcb17818320961` |
+| `profiles-check-v3/summary.json` | `b61ca4f09feb8934a5176ffaabdbaf5f2a40c6baaa02107118fbce76b3fb6ecc` |
+| `prefix-pressure-v1/summary.json` | `4213271c183939bb483be92c12dafc234b19c0652f7010ca0578042d9e491058` |
+| `eagle-boundaries-v1/summary.json` | `22cc6154d5e66f60c035137c58bffc1cf8604fbc8bed0729b44abc6727ac1642` |
+| `native-build-03-v1.json` | `cdd8f75db2415b2597f7e5cecbc78dfe66e9a3b045a4d75aa36605e2c2033605` |
+| `real-eagle17-v2/summary.json`（严格失败） | `4bf2f83143564e3b18a1bb9a61a07ddf98954aaf47682e35974c064c3239d859` |
+| `real-eagle17-v2/audit.json`（Graph 门失败） | `4b9eb6e31370b518539c96a1421d673ee003bc1d3e0c3038ebe16baf9a77fa6f` |
+| `eagle-graph-memcheck-03-v1.json` | `50b99f7bc3d3de285bab75016ed43f8d8b12c8023d1d8e3b7e68caa8be3a29b8` |
+| `native-build-03-v2.json`（输出缓冲修复后） | `2f29195894d1de2d4005ca1b15d9ca0dbc9122d20feb77e09f2f2e55da640360` |
+| `native-build-03-v3.json`（含 FlashInfer 头文件哈希） | `a13d41d4d5fff403a8cfd4289bdb343b458541014b7e6da644c50979f958b754` |
+| `real-qwen35-v1/summary.json`（修复前失败） | `75699fa2c9d090e3179851718aed5c1be27ac6964f36d82ac8a4e2772d2f0733` |
+| `real-qwen35-v2/summary.json` | `167db68b017cc9deeace9f145e5ba85c31fcf6e367c75ea9ba4df11849790fe3` |
+| `real-qwen35-v2/audit.json` | `684606042ac9b448aff4d18e2d28d9f0c1d78da1e3ea0ffd8f2f790cf86bac36` |
+| `hybrid-nonconstant-v1/summary.json` | `3e289c840d74d815275cecb8521ca796928d46a3e413b7efc39b9d82ab906a98` |
+| `real-prefix-pressure-v2/summary.json` | `0f558a1065fa26dc3ae1dcf67e50095ef86371de6aa324bceb7f05f69f2655e6` |
+| `hybrid-moe-graph-memcheck-03-v1.json` | `ff6b62fadc38539462f468186e12d8d9038e468540d5656d610c11a99061e7d4` |
+| `eagle-server-03-v1.json` | `75a8c33851ac4e254c9024144e460e20535fcdd1b6cf0a0423a572c5ea063b2c` |
+| `moe-dflash-regression-03-v1/summary.json` | `4698fd4bccb74ac67a543398c0dae7eda74303fecd3c7f7b8497d5112d048a84` |
+
+CoreX 未取得 SDK/真机；310P 显式拒绝新 EAGLE3/Qwen3.5/Quark profile。0.3 时 Qwen3.5 仅单行顺序 decode Graph，没有多行融合图、投机状态回滚或 Prefix 快照；后两项由下文 0.4 增量实现。旧版真实模型/BF16/DFlash 严格失败仍有效；全部后端仍 candidate。
+
+## 2026-10-17：0.4 功能组合与默认 Prefix
+
+范围见 [功能组合](FEATURE_COMBINATIONS.md)。契约 0.4.0 / bundle 1.3.0；不可变归档 SHA256 为 `877cb3a561288fd9fec405b2b06a459e7898e2804b3d312ba8107fc266fbe199`，快照 `vendor/contracts-0.4.0`，旧 lock/snapshot 保留。默认 Prefix 适用于普通及投机路径；缺少附属快照时安全 miss，不关闭配置。Qwen3.5+EAGLE3 仍明确拒绝。
+
+本机实际通过的检查：
+
+- WSL Python host unittest 27/27；最终 CUDA CTest 3/3；ASan/UBSan 主机 CTest 2/2。Windows 沙箱内的另一次 unittest 因系统临时目录访问被拒而失败，不作为逻辑通过或设备验收证据。
+- 非恒定高 margin 52/53 合成夹具：四种目标的普通路径和六种投机组合，共 10 种组合 × Prefix ON/OFF × eager/Graph = 40 worker、400 请求。36 组比较通过；普通与投机最终输出也相同。宽松容量下比较每轮 draft/verify/接受/提交/上下文；ON 故意省略开关，核验实际默认开启。
+- 小 KV 池压力矩阵：同样 40 worker、560 请求，36 组比较通过。抢占会改变轮次切分，因此这里只比较最终 token。Qwen3 dense/MoE+EAGLE3 的 ON Graph 各观察到 36 次抢占、14 个命中请求、31 次驱逐和 72 次 aux 快照恢复；Qwen3.5 dense/MoE+DFlash 各为 32 次抢占、14 个命中请求、31 次驱逐和 45 次 GDN 快照恢复。活动 KV、EAGLE 草稿 KV、GDN 槽均归零。
+- 上述两份矩阵使用阶段二进制 `6996a83171a111a9bbd71bc737c05f998e35aba98d7a388b78a5df476b47cfd4`。最终修正上下文尾部路径及 EAGLE 图 padding seed 复位后，二进制为 `13d03d0e76d1569366adb458f96d6602332d7b15c5ca9939a83b5e1626265202`；六种投机组合的热 Prefix+Graph 压力输出在最终构建上重放，84 请求逐轮严格匹配阶段报告，六项全通过。不能把阶段矩阵冒充最终二进制的全部重跑。
+- 最终构建的六种投机组合尾部测试：12 worker、84 请求，覆盖窗口 64、prompt 59/60/61/62/63 与输出 5/4/3/2/1，以及 max_tokens=1/2。预期非恒定 token、完成原因、eager/Graph 逐轮一致和活动状态归零均通过。
+- 真实 Qwen3.5-2B FP16 加随机合成 DFlash，及同一目标普通路径，分别完成 Prefix ON/OFF × eager/Graph 小池回归，各 40 请求；各自三组比较和普通/投机之间四组比较全通过。投机 ON Graph 实测 28 次抢占、5 个命中请求、55 次驱逐、17 次 GDN 快照恢复，draft/verify 图 replay=42/126；结束后活动状态归零。随机草稿只验证回滚/复用，不证明训练接受率、逐轮 Python 差分或加速。
+- 真实 Qwen3-1.7B+官方 EAGLE3 safetensors，Prefix ON/OFF × eager/Graph 小池回归 40 请求、三组比较通过。ON Graph 实测 26 次抢占、7 个命中请求、49 次驱逐、25 次 aux 快照恢复、400 个草稿前缀重建 token，draft/verify replay=76/38；EAGLE 私有 KV 和活动状态归零。这只证明本机原生四路径之间最终输出一致，不豁免旧 Python/C++ 逐轮差异，也不证明性能。
+- Qwen3.5 MoE+DFlash 和 Qwen3 MoE+EAGLE3 合成组合，各通过原生 HTTP/SSE 27 项检查，包含鉴权/非法请求、并发、文本 stop、断连取消、stats/metrics 及正常停机。未显式传 Prefix 开关，最终 resolved config 为 true。
+- 上述两种 MoE 投机组合的默认 Prefix+Graph，各运行一次 Compute Sanitizer memcheck，均 `ERROR SUMMARY: 0 errors`。只覆盖命令中的合成输入、batch=4，不代表全形状、racecheck 或长稳通过。
+- Qwen3.5 MoE+DFlash 非恒定夹具与 Python 直接对表：三条 257-token prompt、batch=4、重复两次、页大小 256，默认 Prefix 开启；四个 worker 的最终 token、逐轮 draft/verify/接受/提交/上下文、模式内一致性全通过。审计确认配置/结果哈希和测量期 Graph，Python spec replay=16，原生 draft/verify replay=24/72。合成 trace 模式下原生 Graph 约 9.60 tok/s、Python 约 73.30 tok/s，只作参考路径诊断，既非热态 ABBA 性能验收，也不能宣称已达到 95% 吞吐门禁；参考实现的性能优化仍未完成。
+- 构建证据保存最终源码、契约、FlashInfer 头文件、二进制和动态依赖哈希；未发现 libpython/libtorch_python/librust 动态依赖，不等于完整供应链审计或正式离线发布。
+
+工件仍位于 Python 仓忽略目录 `deployment_output/`，必须独立归档；所有报告保留命令、二进制哈希、结果和失败日志。新增门禁不会豁免上文真实 EAGLE3、长输出或 BF16 的严格失败。Qwen3.5 使用参考 attention 和单行顺序 target Graph；CoreX 未编译/未上板，310P 拒绝新增模型/草稿。真实训练 Qwen3.5 MoE/DFlash、长稳、长上下文和性能仍未通过，全部后端维持 candidate。
+
+| 工件 | SHA256 |
+|---|---|
+| `combinations-check-v1/summary.json` | `98285cf453f2e14cbf95dafcc45455f1929aede8c2a1b33dea22ffe77f8eb153` |
+| `combinations-pressure-v1/summary.json` | `2537b530a5e33c545910ec47b0bad4769d97d0914ec841cdc519483189f6fb50` |
+| `combinations-final-v1/summary.json` | `857cbd3c19ad8839850d6f9522f05fe10974248a4fc148d2d92a5a1cbd5ee0e5` |
+| `combinations-tails-v1/summary.json` | `bb537955de1feebb4a12f6da6b19a9dde3fc63468bc1477f25595783b4f433bc` |
+| `real-qwen35-spec-prefix-04-v1/summary.json` | `07f4dc8646144b1f931b23d16c1decee3196c41e75003ffd13a3a680365f4772` |
+| `real-qwen35-plain-prefix-04-v1/summary.json` | `785e87685515ca30ca917fe41f4f52bf7a4bea788839e21efc1674ede4bc275f` |
+| `real-qwen35-spec-vs-plain-04-v1.json` | `9cbb40b02fda50c180c75ad926ca059179c5d09ae302d3acd5a31650de08a65a` |
+| `real-eagle-prefix-04-v1/summary.json` | `6fbcac49e797a582700326b15975721c8d1a90ff3b39dc8ab09ce11c1214a390` |
+| `hybrid-moe-dflash-server-04-v1.json` | `444856471e322803364df19dbf81d6956437b90dfdd36e40e4ada5312e83a743` |
+| `moe-eagle-server-04-v1.json` | `a268e9d3d7fbc8034a9067b9803adfe9324b5532faafb41e0bb223762d7fa0a9` |
+| `hybrid-moe-dflash-memcheck-04-v1.json` | `6201f40cdc5a4fb4e06b5ceeb231f991860a88f1e1b37e3a03cce3512fe55a2f` |
+| `moe-eagle-prefix-memcheck-04-v1.json` | `f2377bf4b5737428489c546e32623fd6a1839b6dc456cbcd824dc54ab9027d49` |
+| `hybrid-moe-dflash-python-04-v1/summary.json` | `24234d0313f030e1730ec329bc3b136fe593b2926d827443684314c059ba8e60` |
+| `hybrid-moe-dflash-python-04-v1/audit.json` | `3ce3be859fa82e08396fad82a239a497ddaa81305d4a7387984d294d600c7e8f` |
+| `native-build-combinations-v1.json` | `e0bef7479e49b432a43d7e17bc0efa76d795803bb50a488071dacbd82fc97335` |

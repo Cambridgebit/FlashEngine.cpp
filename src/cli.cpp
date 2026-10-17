@@ -11,6 +11,11 @@ int run_device_cli(const std::string& command,Bundle& bundle,Tokenizer& tokenize
   for(int i=3;i<argc;++i){std::string flag=argv[i];auto value=[&](){require(i+1<argc,"选项缺少值");return std::string(argv[++i]);};
     if(flag=="--backend")config.backend=value();
     else if(flag=="--logits")config.trace_logits=true;
+    else if(flag=="--prefix-cache")config.enable_prefix_cache=true;
+    else if(flag=="--no-prefix-cache")config.enable_prefix_cache=false;
+    else if(flag=="--enable-chunked-prefill")config.enable_chunked_prefill=true;
+    else if(flag=="--disable-chunked-prefill")config.enable_chunked_prefill=false;
+    else if(flag=="--recurrent-prefix-cache-bytes")config.recurrent_prefix_cache_bytes=parse_integer(value());
     else if(flag=="--teacher-force")teacher=true;
     else if(flag=="--prompt")prompt=value();
     else if(flag=="--oracle")oracle=value();
@@ -48,14 +53,14 @@ int run_device_cli(const std::string& command,Bundle& bundle,Tokenizer& tokenize
     Json results=Json::array();bool passed=true;int index=0;
     for(auto& item:golden.at("cases")){
       require(item.at("sampling").at("temperature")==0,"原生 replay 仅支持 greedy oracle");
-      Scheduler scheduler(config);scheduler.on_release=[&](uint64_t id){model->drop(id);};auto seq=std::make_shared<Sequence>(++index,item.at("prompt_token_ids").get<std::vector<int64_t>>(),item.at("sampling").at("max_tokens"));seq->ignore_eos=item.at("sampling").value("ignore_eos",false);scheduler.add(seq);Json rounds=Json::array(),samples=Json::array();std::vector<int64_t> observed;
+      Scheduler scheduler(config);bind_model(scheduler,*model);auto seq=std::make_shared<Sequence>(++index,item.at("prompt_token_ids").get<std::vector<int64_t>>(),item.at("sampling").at("max_tokens"));seq->ignore_eos=item.at("sampling").value("ignore_eos",false);scheduler.add(seq);Json rounds=Json::array(),samples=Json::array();std::vector<int64_t> observed;
       while(!scheduler.empty()){auto batch=scheduler.schedule();auto output=model->run(batch);for(size_t i=0;i<batch.sequences.size();++i){auto s=batch.sequences[i];if(batch.prefill)s->cached+=s->scheduled;auto committed=output.tokens.at(i);if(teacher&&!committed.empty()){require(committed.size()==1,"teacher-force 只允许单 token 提交");observed.push_back(committed[0]);committed[0]=item.at("output_token_ids").at(s->tokens.size()-s->prompt_size);}scheduler.commit(s,committed);if(s->status!=Status::finished&&!committed.empty())s->cached=s->tokens.size()-1;s->scheduled=0;}for(auto round:output.rounds){round.erase("request_id");rounds.push_back(round);}for(auto sample:output.samples)samples.push_back(sample);}
       std::vector<int64_t> generated=teacher?observed:std::vector<int64_t>(seq->tokens.begin()+seq->prompt_size,seq->tokens.end());bool ok=generated==item.at("output_token_ids").get<std::vector<int64_t>>()&&seq->finish_reason==item.at("finish_reason");if(!item.value("rounds",Json::array()).empty())ok=ok&&nlohmann::json(rounds)==nlohmann::json(item.at("rounds"));passed=passed&&ok;results.push_back({{"case",index},{"passed",ok},{"teacher_forced",teacher},{"token_ids",generated},{"rounds",rounds},{"samples",samples}});
     }
     std::cout<<Json{{"passed",passed},{"cases",results},{"runtime",model->snapshot()}}.dump()<<std::endl;return passed?0:2;
   }
   auto ids=tokenizer.encode(chat?tokenizer.render(Json::array({{{"role","user"},{"content",prompt}}}),false):prompt);
-  Scheduler scheduler(config);scheduler.on_release=[&](uint64_t id){model->drop(id);};auto seq=std::make_shared<Sequence>(1,ids,limit);scheduler.add(seq);Json rounds=Json::array();
+  Scheduler scheduler(config);bind_model(scheduler,*model);auto seq=std::make_shared<Sequence>(1,ids,limit);scheduler.add(seq);Json rounds=Json::array();
   while(!scheduler.empty()){
     auto batch=scheduler.schedule();if(batch.sequences.empty())break;auto result=model->run(batch);
     for(size_t i=0;i<batch.sequences.size();++i){auto& s=batch.sequences[i];if(batch.prefill)s->cached+=s->scheduled;scheduler.commit(s,result.tokens[i]);if(s->status!=Status::finished&&!result.tokens[i].empty())s->cached=s->tokens.size()-1;s->scheduled=0;}

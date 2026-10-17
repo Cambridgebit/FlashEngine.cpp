@@ -11,7 +11,7 @@
     "libtorch":{"version":"2.11.0+cu130","provider":"existing torch C++ headers/libs; no libtorch_python link"},
     "flashinfer":{"version":"0.6.14","provider":"existing installed C++/CUDA headers; file digests required in build evidence","compatibility":"project-local uint_fastdiv for CUDA 13.0"},
     "corex_sdk":{"version":null,"provider":"尚未取得厂商 SDK，不允许使用 NVIDIA LibTorch 代替","required_apis":["ATen C++","c10 CUDA-compatible stream","CUDAGraph"],"compiled":false},
-    "cann":{"version":null,"provider":"尚未取得 310P SDK；需要匹配驱动/固件/算子包","required_libraries":["ascendcl","nnopbase","opapi"],"required_apis":["ACLNN","aclSetAclOpExecutorRepeatable","aclDestroyAclOpExecutor","aclmdlRICaptureBegin","aclmdlRICaptureEnd","aclmdlRIExecuteAsync","aclmdlRIDestroy"],"compiled":false},
+    "cann":{"version":null,"provider":"尚未取得 310P SDK；源码对齐增量未编译/测试，需要匹配驱动/固件/算子包","required_libraries":["ascendcl","nnopbase","opapi"],"required_apis":["ACLNN","aclnnBatchMatMul","aclnnExp","aclnnRsqrt","aclnnSigmoid","aclnnSoftplus","aclSetAclOpExecutorRepeatable","aclDestroyAclOpExecutor","aclmdlRICaptureBegin","aclmdlRICaptureEnd","aclmdlRIExecuteAsync","aclmdlRIDestroy"],"compiled":false},
     "atb":{"version":null,"provider":"尚未接入；当前 310P 为 ACLNN ND 参考路径"}
   },
   "release_ready":false,

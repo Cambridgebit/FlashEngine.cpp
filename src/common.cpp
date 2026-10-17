@@ -62,6 +62,7 @@ void Config::validate() const {
   require(dtype=="float16"||dtype=="bfloat16","不支持的 dtype");
   require(backend=="cuda"||backend=="corex"||backend=="ascend310p","未知后端");
   require(!(production&&enforce_eager),"production 要求 Graph");
+  require(recurrent_prefix_cache_bytes>=0,"前缀附属状态预算不可为负");
 }
-Json Config::json() const {return {{"max_model_len",max_model_len},{"max_num_seqs",max_num_seqs},{"max_num_batched_tokens",max_num_batched_tokens},{"max_num_partial_prefills",max_num_partial_prefills},{"kvcache_block_size",kvcache_block_size},{"num_kvcache_blocks",num_kvcache_blocks},{"enable_chunked_prefill",enable_chunked_prefill},{"enable_prefix_cache",false},{"enforce_eager",enforce_eager},{"production",production},{"backend",backend},{"dtype",dtype},{"tensor_parallel_size",1},{"spec_num_tokens",spec_num_tokens},{"eos_token_id",eos},{"trace_logits",trace_logits}};}
+Json Config::json() const {return {{"max_model_len",max_model_len},{"max_num_seqs",max_num_seqs},{"max_num_batched_tokens",max_num_batched_tokens},{"max_num_partial_prefills",max_num_partial_prefills},{"kvcache_block_size",kvcache_block_size},{"num_kvcache_blocks",num_kvcache_blocks},{"enable_chunked_prefill",enable_chunked_prefill},{"enable_prefix_cache",enable_prefix_cache},{"recurrent_prefix_cache_bytes",recurrent_prefix_cache_bytes},{"enforce_eager",enforce_eager},{"production",production},{"backend",backend},{"dtype",dtype},{"tensor_parallel_size",1},{"spec_num_tokens",spec_num_tokens},{"eos_token_id",eos},{"trace_logits",trace_logits}};}
 }

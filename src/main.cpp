@@ -1,5 +1,6 @@
 #include "fe/bundle.hpp"
 #include "fe/tokenizer.hpp"
+#include "fe/features.hpp"
 #include <iostream>
 #if defined(FE_HAS_CUDA) || defined(FE_HAS_ASCEND)
 #include "fe/model.hpp"
@@ -21,7 +22,11 @@ int main(int argc,char** argv){
       [--graph|--eager] [--trace-rounds]；完整公共配置由 workload 固定
 服务：--host 地址 --port N --served-model-name 名称 --api-key 密钥
       --reserve-output N --no-think
-限制：TP=1、greedy、无量化/Prefix cache；具体后端以 capabilities 和验收记录为准。
+缓存：默认开启；--no-prefix-cache 仅用于显式 A/B；--recurrent-prefix-cache-bytes N。
+预填充：默认分块；--enable-chunked-prefill / --disable-chunked-prefill。
+        --max-num-batched-tokens 控制每步预算；--max-num-partial-prefills 控制分块并发。
+限制：TP=1、greedy；Quark int8 加载期反量化，不承诺 int8 GEMM。
+Qwen3.5：文本参考路径；单行 decode/verify Graph、DFlash 与 GDN 前缀快照。
 )";return 0;
     }
     if(argc==2&&std::string(argv[1])=="capabilities"){
@@ -36,8 +41,7 @@ int main(int argc,char** argv){
 #elif defined(FE_HAS_ASCEND)
       backend="ascend310p";attention="aclnn-nd-reference";
 #endif
-      fe::Json out{{"contract_version",fe::contract_version},{"compiled_backend",backend},{"attention",attention},{"production_qualified",false},{"profiles",{"qwen3-dense-v1","qwen3-moe-v1","dflash1-greedy-v1"}},{"device_execution",backend!="host"},{"graph",backend!="host"},{"tensor_parallel_size",1},{"quantization",false},{"prefix_cache",false},{"dflash_reduced_vocab",false},{"dflash_sliding_attention",false},{"architectures","Linux x86_64/aarch64，必须使用相应架构和厂商 SDK 编译"}};
-      out["dtypes"]=backend=="ascend310p"?fe::Json({"float16"}):fe::Json({"float16","bfloat16"});
+      auto out=fe::source_capabilities(backend,attention);
       std::cout<<out.dump()<<std::endl;return 0;
     }
     fe::require(argc>=3,"用法：flashengine-native 命令 BUNDLE [选项]；查看 --help 或 capabilities");

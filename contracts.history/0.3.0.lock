@@ -1,0 +1,14 @@
+{
+  "artifact": "contracts-0.3.0-final.tar.gz",
+  "artifact_sha256": "0399c756257ab80867b04cc074435bd54dcf49b1c993fc472c1e34be82bb8cc9",
+  "contract_version": "0.3.0",
+  "directory": "vendor/contracts-0.3.0",
+  "files": {
+    "catalog.json": "654ce8924d8437ee06dfd6dce60fecd0b68070e0927d705a58fb4bd65437c24f",
+    "engine-config.schema.json": "8951f3968d2102716a3ef1956b5f18bb9cbcdc130d1efd04a4fd89246427d77b",
+    "openai-subset.json": "60f5bf1a77fb87b2cbd87e18d1ad4c391535609512c0ca6b006c07e74965d49a",
+    "telemetry.json": "f210bda1ba449001c3a65d4802111f189b2901be6a9a189033a14cdd42f78832",
+    "trace.schema.json": "e6673da7b21fb2e14fba1d685d8163bc5fb0e32feaec5c28d720d1e414340218"
+  },
+  "oracle_git_sha": "17f1a4b792fecac48d6aaa7962533dd52f595368"
+}
