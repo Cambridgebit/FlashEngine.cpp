@@ -1,6 +1,6 @@
 # FlashEngine Native（candidate）
 
-独立维护的 C++20 部署实现，Python FlashEngine 负责实验与 oracle。本目录是独立 Git 仓，父仓忽略它；尚未创建远程仓库或提交。当前实现不是生产版本，不能沿用 Python 仓的支持声明。
+独立维护的 C++20 部署实现，Python FlashEngine 负责实验与 oracle。本目录是独立 Git 仓，位于 Python 仓同级目录 `D:/Materials/AVIC/FlashEngine.cpp`，远程仓库为 <https://github.com/Cambridgebit/FlashEngine.cpp>。仓库只提交源码、测试、契约和构建配置；本地 `build/`、依赖源码与其他构建结果均由 `.gitignore` 排除。当前实现不是生产版本，不能沿用 Python 仓的支持声明。
 
 ## 已实现与未验收
 
