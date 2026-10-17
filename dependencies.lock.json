@@ -1,0 +1,19 @@
+{
+  "schema_version":1,
+  "build_environment":{"os":"Ubuntu 22.04 x86_64","gcc":"11.4.0","cmake":"4.4.2","cuda":"13.0.3","nvcc":"13.0.88","architecture":"sm_89"},
+  "dependencies":{
+    "minja":{"git":"https://github.com/google/minja.git","commit":"021c2293c187789ef13d56c6cfd89c9b134fd80f","license":"MIT"},
+    "nlohmann_json":{"version":"3.10.5","provider":"Ubuntu dev package"},
+    "boost":{"version":"1.74.0","provider":"Ubuntu dev package"},
+    "pcre2":{"version":"10.39","provider":"Ubuntu dev package"},
+    "icu":{"version":"70.1","provider":"Ubuntu dev package"},
+    "openssl":{"version":"3.0.2","provider":"Ubuntu dev package"},
+    "libtorch":{"version":"2.11.0+cu130","provider":"existing torch C++ headers/libs; no libtorch_python link"},
+    "flashinfer":{"version":"0.6.14","provider":"existing installed C++/CUDA headers; file digests required in build evidence","compatibility":"project-local uint_fastdiv for CUDA 13.0"},
+    "corex_sdk":{"version":null,"provider":"尚未取得厂商 SDK，不允许使用 NVIDIA LibTorch 代替","required_apis":["ATen C++","c10 CUDA-compatible stream","CUDAGraph"],"compiled":false},
+    "cann":{"version":null,"provider":"尚未取得 310P SDK；需要匹配驱动/固件/算子包","required_libraries":["ascendcl","nnopbase","opapi"],"required_apis":["ACLNN","aclSetAclOpExecutorRepeatable","aclDestroyAclOpExecutor","aclmdlRICaptureBegin","aclmdlRICaptureEnd","aclmdlRIExecuteAsync","aclmdlRIDestroy"],"compiled":false},
+    "atb":{"version":null,"provider":"尚未接入；当前 310P 为 ACLNN ND 参考路径"}
+  },
+  "release_ready":false,
+  "policy":"本文件记录开发环境；完整二进制/源码哈希门禁及 Ascend 工具链未通过前不得宣称可复现正式发布。"
+}

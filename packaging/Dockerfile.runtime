@@ -1,0 +1,12 @@
+# 构建上下文 runtime/ 由受控软件供应流程准备：bin/、lib/、licenses/、manifest.json。
+# FE_BASE_IMAGE 必须使用与后端、主机架构、驱动/CANN ABI 配套的 digest，不接受浮动标签。
+ARG FE_BASE_IMAGE
+FROM ${FE_BASE_IMAGE}
+ARG FE_BASE_IMAGE
+RUN case "$FE_BASE_IMAGE" in *@sha256:*) ;; *) exit 1 ;; esac
+COPY runtime/ /opt/flashengine/
+ENV LD_LIBRARY_PATH=/opt/flashengine/lib:${LD_LIBRARY_PATH}
+WORKDIR /opt/flashengine
+USER 10001:10001
+EXPOSE 8000
+ENTRYPOINT ["/opt/flashengine/bin/flashengine-native"]

@@ -1,0 +1,13 @@
+{
+  "version":4,
+  "configurePresets":[
+    {"name":"host","generator":"Unix Makefiles","binaryDir":"${sourceDir}/build/host","cacheVariables":{"CMAKE_BUILD_TYPE":"Release","FE_CUDA":"OFF"}},
+    {"name":"host-asan","inherits":"host","binaryDir":"${sourceDir}/build/asan","cacheVariables":{"CMAKE_BUILD_TYPE":"Debug","FE_ASAN":"ON"}},
+    {"name":"cuda","inherits":"host","binaryDir":"${sourceDir}/build/cuda","cacheVariables":{"FE_CUDA":"ON","CMAKE_CUDA_ARCHITECTURES":"89"}},
+    {"name":"cuda-reference","inherits":"cuda","binaryDir":"${sourceDir}/build/cuda-reference","cacheVariables":{"FE_REFERENCE_OPS":"ON"}},
+    {"name":"corex","inherits":"host","binaryDir":"${sourceDir}/build/corex","cacheVariables":{"FE_COREX":"ON"}},
+    {"name":"ascend310p","inherits":"host","binaryDir":"${sourceDir}/build/ascend310p","cacheVariables":{"FE_ASCEND":"ON"}}
+  ],
+  "buildPresets":[{"name":"host","configurePreset":"host"},{"name":"cuda","configurePreset":"cuda"},{"name":"host-asan","configurePreset":"host-asan"},{"name":"cuda-reference","configurePreset":"cuda-reference"},{"name":"corex","configurePreset":"corex"},{"name":"ascend310p","configurePreset":"ascend310p"}],
+  "testPresets":[{"name":"host","configurePreset":"host","output":{"outputOnFailure":true}},{"name":"host-asan","configurePreset":"host-asan","output":{"outputOnFailure":true}}]
+}

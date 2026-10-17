@@ -1,0 +1,20 @@
+/build/
+/out/
+/third_party/
+/bundles/
+*.log
+*.so
+*.o
+*.a
+*.dylib
+*.dll
+*.exe
+*.bin
+*.d
+compile_commands.json
+CMakeUserPresets.json
+
+# Local test/benchmark output; source, tests and reproducibility metadata stay tracked.
+/results/
+/benchmark_results/
+/coverage/

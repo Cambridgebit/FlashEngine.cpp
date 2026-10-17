@@ -1,0 +1,27 @@
+# 安装前替换用户、路径和设备权限；本模板不自动创建用户或配置驱动。
+[Unit]
+Description=FlashEngine Native candidate
+After=network.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=flashengine
+Group=flashengine
+WorkingDirectory=/opt/flashengine
+EnvironmentFile=-/etc/flashengine/runtime.env
+ExecStart=/opt/flashengine/bin/flashengine-native serve /srv/flashengine/bundle --host 127.0.0.1 --port 8000 --served-model-name Qwen3 --max-model-len 2048 --max-num-seqs 4 --kv-blocks 32 --graph --no-think
+Restart=on-failure
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=30
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+UMask=0077
+# 不启用 PrivateDevices；加速卡依赖宿主设备节点及厂商指定的用户组权限。
+
+[Install]
+WantedBy=multi-user.target

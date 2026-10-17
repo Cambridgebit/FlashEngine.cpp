@@ -1,0 +1,11 @@
+{
+  "contract_version": "0.1.0",
+  "bundle_format": "1.0.0",
+  "profiles": {
+    "qwen3-dense-v1": {"target": "qwen3", "tensor_parallel_size": 1, "quantization": "none"},
+    "dflash1-greedy-v1": {"spec_method": "dflash", "temperature": 0, "sample_from_anchor": false, "aux_semantics": "target_layer_ids+1", "k": "resolved; 1 <= k < block_size"}
+  },
+  "backend_ids": ["cuda", "ascend310p"],
+  "v1_excluded": ["prefix_cache", "eagle3", "dspark", "moe", "qwen3_5", "quantization", "tp>1"],
+  "oracle_policy": "Python 是行为参考，C++ 每个后端单独声明验收状态；本目录不声明部署就绪。"
+}

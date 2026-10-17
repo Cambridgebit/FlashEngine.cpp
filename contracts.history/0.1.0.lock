@@ -1,0 +1,13 @@
+{
+  "artifact": "flashengine-contracts-0.1.0.tar.gz",
+  "artifact_sha256": "8697651192804ae584308eb53106af43a0389df5e1340fbc3e1b0ae0a7811181",
+  "contract_version": "0.1.0",
+  "files": {
+    "catalog.json": "8f22989f4b687d4958dc2cb53d54f9a27f8596c1a1e936c75682dd88e5dea019",
+    "engine-config.schema.json": "7af7482c5fd3e353504cadcb6050c18907cac8aca77365c38d7928a40de37fd6",
+    "openai-subset.json": "60f5bf1a77fb87b2cbd87e18d1ad4c391535609512c0ca6b006c07e74965d49a",
+    "telemetry.json": "776e115d113d9339f77c0995cf7bef8623f14af7c130e9fc6e17ef991973e906",
+    "trace.schema.json": "c71dda3b31a78e8bc5d66e86a36c097c0e4fc8b45af9a1513758ff13fd0c22ea"
+  },
+  "oracle_git_sha": "17f1a4b792fecac48d6aaa7962533dd52f595368"
+}
