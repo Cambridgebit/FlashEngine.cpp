@@ -24,12 +24,25 @@ inline float host_float(const WeightView& w,size_t i){
 }
 inline T load_weight(const std::map<std::string,WeightView>& source,const std::string& name,bool fp32=false){
   auto& w=source.at(name);if(w.dtype=="I64"){auto out=tensor(w.shape,ACL_INT64);upload(out,w.data(),w.bytes);return out;}
-  auto out=tensor(w.shape,fp32?ACL_FLOAT:ACL_FLOAT16);size_t count=elements(w.shape),chunk=std::min(count,size_t(1<<18));std::vector<float> converted(chunk);std::vector<uint16_t> half(chunk);
+  auto out=tensor(w.shape,fp32?ACL_FLOAT:ACL_FLOAT16);size_t count=elements(w.shape),chunk=std::min(count,size_t(1<<18));
+  // 普通权重只在张量边界校验；逐元素调用 host_float 会重复创建错误字符串并遍历形状。
+  require(w.dtype=="F16"||w.dtype=="BF16"||w.dtype=="F32"||w.dtype=="I8","不支持的浮点源 dtype");
+  if((w.dtype=="F16"&&!fp32)||(w.dtype=="F32"&&fp32)){upload(out,w.data(),w.bytes);return out;}
+  const auto* raw=static_cast<const char*>(w.data());
+  std::vector<float> converted(chunk);std::vector<uint16_t> half(chunk);
   std::vector<float> scale,zero;if(w.dtype=="I8"){
     require(name.ends_with(".weight")&&w.shape.size()==2,"Quark 只支持逐输出通道 2D int8 权重");auto p=name.substr(0,name.size()-7);auto& s=source.at(p+".weight_scale");require(elements(s.shape)==w.shape[0],"Quark scale 形状错误");
     for(int64_t r=0;r<w.shape[0];++r){float v=host_float(s,r);require(std::isfinite(v)&&v>0,"Quark scale 必须有限且为正");scale.push_back(v);zero.push_back(source.contains(p+".weight_zero_point")?host_float(source.at(p+".weight_zero_point"),r):0);require(std::isfinite(zero.back()),"Quark zero 非有限");}
   }
-  for(size_t start=0;start<count;start+=chunk){size_t n=std::min(chunk,count-start);for(size_t i=0;i<n;++i){float v=host_float(w,start+i);if(!scale.empty()){size_t row=(start+i)/w.shape[1];v=(v-zero[row])*scale[row];}converted[i]=v;half[i]=fp16(v);}size_t item=fp32?4:2;check(aclrtMemcpy(static_cast<char*>(out->data())+start*item,(count-start)*item,fp32?static_cast<void*>(converted.data()):static_cast<void*>(half.data()),n*item,ACL_MEMCPY_HOST_TO_DEVICE),"装载权重");}return out;
+  for(size_t start=0;start<count;start+=chunk){size_t n=std::min(chunk,count-start);
+    if(w.dtype=="BF16"){
+      for(size_t i=0;i<n;++i){uint16_t bits;std::memcpy(&bits,raw+(start+i)*2,2);float v=std::bit_cast<float>(uint32_t(bits)<<16);if(fp32)converted[i]=v;else half[i]=fp16(v);}
+    }else if(w.dtype=="F32"){
+      for(size_t i=0;i<n;++i){float v;std::memcpy(&v,raw+(start+i)*4,4);half[i]=fp16(v);}
+    }else{
+      for(size_t i=0;i<n;++i){float v=host_float(w,start+i);if(!scale.empty()){size_t row=(start+i)/w.shape[1];v=(v-zero[row])*scale[row];}if(fp32)converted[i]=v;else half[i]=fp16(v);}
+    }
+    size_t item=fp32?4:2;check(aclrtMemcpy(static_cast<char*>(out->data())+start*item,(count-start)*item,fp32?static_cast<void*>(converted.data()):static_cast<void*>(half.data()),n*item,ACL_MEMCPY_HOST_TO_DEVICE),"装载权重");}return out;
 }
 inline void zero(const T& t){check(aclrtMemset(t->data(),t->size(),0,t->size()),"初始化 tensor");}
 struct HostTensor {std::vector<int64_t> shape;aclDataType dtype;std::vector<uint8_t> data;};
@@ -55,10 +68,17 @@ struct Net {
   std::map<std::string,T> weights;std::vector<T> keys,values,conv,ssm;T embed,head,rope,state_slot;
   Net(const std::map<std::string,WeightView>& source,Json cfg,const Config& c,T shared_embed={},T shared_head={}):config(std::move(cfg)){
     h=config.at("hidden_size");hq=config.at("num_attention_heads");hkv=config.at("num_key_value_heads");dim=config.at("head_dim");layers=config.at("num_hidden_layers");eps=config.at("rms_norm_eps");eagle=config.value("spec_method",std::string())=="eagle3";hybrid=config.value("model_type",std::string()).starts_with("qwen3_5");rotary=hybrid?config.at("rotary_dim").get<int>():dim;
-    for(auto& [name,v]:source)if(!name.ends_with(".weight_scale")&&!name.ends_with(".weight_zero_point"))weights[name]=load_weight(source,name,name.ends_with("A_log")||name.ends_with("dt_bias"));
+    startup_trace("开始装载参考网络权重："+config.at("model_type").get<std::string>());
+    size_t loaded_bytes=0,next_progress=1ULL<<30;
+    for(auto& [name,v]:source)if(!name.ends_with(".weight_scale")&&!name.ends_with(".weight_zero_point")){
+      weights[name]=load_weight(source,name,name.ends_with("A_log")||name.ends_with("dt_bias"));loaded_bytes+=v.bytes;
+      if(startup_trace_enabled()&&loaded_bytes>=next_progress){startup_trace("已装载源权重字节="+std::to_string(loaded_bytes));next_progress=loaded_bytes+(1ULL<<30);}
+    }
+    startup_trace("权重装载完成；开始聚合专家及分配状态");
     embed=weights.contains("embed_tokens.weight")?w("embed_tokens.weight"):shared_embed;require(bool(embed),"缺少 embedding");head=weights.contains("lm_head.weight")?w("lm_head.weight"):shared_head?shared_head:embed;
     if(hybrid)require(config.at("mamba_ssm_dtype")=="float32"&&(config.at("output_gate_type")=="silu"||config.at("output_gate_type")=="sigmoid"),"不支持的 GDN 状态类型/门控");
     for(int l=0;l<layers;++l){auto p="layers."+std::to_string(l)+".";
+      if(startup_trace_enabled()&&l%8==0)startup_trace("初始化层="+std::to_string(l)+"/"+std::to_string(layers));
       if(moe_layer(config,l)&&!weights.contains(p+"mlp.experts.gate_up_proj.weight")){
         int e=config.at("num_experts"),m=config.at("moe_intermediate_size");auto gu=tensor({e,2*m,h}),down=tensor({e,h,m});
         for(int j=0;j<e;++j)for(std::string part:{"gate","up","down"}){auto name=p+"mlp.experts."+std::to_string(j)+"."+part+"_proj.weight";auto v=w(name),dst=part=="down"?down:gu;size_t offset=part=="down"?size_t(j)*h*m:size_t(j)*2*m*h+(part=="up"?m*h:0);check(aclrtMemcpy(static_cast<char*>(dst->data())+offset*2,dst->size()-offset*2,v->data(),v->size(),ACL_MEMCPY_DEVICE_TO_DEVICE),"聚合专家");weights.erase(name);}weights[p+"mlp.experts.gate_up_proj.weight"]=gu;weights[p+"mlp.experts.down_proj.weight"]=down;
@@ -69,6 +89,7 @@ struct Net {
     }
     rope=tensor({c.max_model_len,rotary},ACL_FLOAT);std::vector<float> cache(c.max_model_len*rotary);double theta=config.at("rope_theta");for(int64_t p=0;p<c.max_model_len;++p)for(int j=0;j<rotary/2;++j){float f=float(p)/std::pow(float(theta),float(j*2)/rotary);cache[p*rotary+j]=std::cos(f);cache[p*rotary+j+rotary/2]=std::sin(f);}upload(rope,cache.data(),cache.size()*4);
     state_slot=tensor({1},ACL_INT64);int64_t dummy=c.max_num_seqs;upload(state_slot,&dummy,8);
+    startup_trace("参考网络权重和状态就绪");
   }
   T w(const std::string& name)const{return weights.at(name);}
   bool recurrent()const{return std::any_of(ssm.begin(),ssm.end(),[](const T& state){return bool(state);});}

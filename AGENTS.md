@@ -1,5 +1,7 @@
 # FlashEngine C++ 维护约定
 
+**2026-10-20 310P Qwen3 / DFlash 真机对齐**：新增纯 C++ ATB Flash/Paged/SplitFuse、NZ 权重/KV、打包 QKV/gate-up、整轮 ACL Graph 与设备接受/上下文投影。RoPE 算子和 FP32 常量生成均使用与 Python 对应的公开 ACLNN；主机三角函数的 FP16 舍入差异不能豁免 oracle。首次新长度的执行计划准备与热态性能分别记录。当前范围、严格差分、失败历史及板端证据见 `docs/ASCEND310P_PYTHON_PARITY_20261020.md`；其他 310P profile 仍为原 ND 参考路径，不能扩大验收范围或授予 production。
+
 **2026-10-17 三后端源码对齐**：本轮用户明确要求只改代码、不测试，未构建、未运行任何测试，现有 build 仍为旧程序。310P 新增纯 ACLNN Qwen3.5 dense/MoE、DFlash 回滚、EAGLE3 shifted/carry/私有 KV/Prefix，以及 Quark 加载期反量化；target 使用单行顺序 Graph，ND 参考 attention，不是 ATB/NZ/真 int8。CoreX 继续共用 CUDA 模型层。公共 scheduler 补齐 chunked-prefill CLI/workload 开关和统计；详见 `docs/BACKEND_PARITY_SOURCE.md`。所有本轮修改均 unvalidated-source-changes；下方历史通过报告不覆盖它们。不得删除失败记录或把源码对齐标为编译/行为/性能验收。
 
 **0.4 组合增量**：Prefix 默认开启；Qwen3 dense/MoE 可组合 DFlash/EAGLE3，Qwen3.5 文本 dense/MoE 可组合 DFlash。附属状态须通过 prefix_ready 门控；Qwen3.5 用 CPU GDN 边界快照与逐验证行回滚，EAGLE3 用独立草稿 KV+aux 重建。Graph 为参考分图/单行顺序验证，不宣称融合 verify。最新范围见 `docs/FEATURE_COMBINATIONS.md`；验收只认 `docs/VALIDATION.md` 的实际报告。以下 0.3 条目是历史记录；真实 EAGLE3 逐轮差异和后端真机门禁仍未关闭。

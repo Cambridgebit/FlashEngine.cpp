@@ -1,6 +1,7 @@
 #include "fe/bundle.hpp"
 #include "fe/tokenizer.hpp"
 #include "fe/features.hpp"
+#include "fe/startup_trace.hpp"
 #include <iostream>
 #if defined(FE_HAS_CUDA) || defined(FE_HAS_ASCEND)
 #include "fe/model.hpp"
@@ -39,14 +40,19 @@ Qwen3.5：文本参考路径；单行 decode/verify Graph、DFlash 与 GDN 前�
       attention=backend=="corex"?"aten-paged-reference":"flashinfer-native";
 #endif
 #elif defined(FE_HAS_ASCEND)
-      backend="ascend310p";attention="aclnn-nd-reference";
+      backend="ascend310p";attention="atb-qwen3+aclnn-reference";
 #endif
       auto out=fe::source_capabilities(backend,attention);
+#ifdef FE_HAS_ASCEND
+      out["implementation_revision"]="ascend-atb-batch-2026-10-19";
+      out["execution_paths"]={{{"targets",{"qwen3"}},{"spec_methods",{"none","dflash"}},{"attention","atb-flash-paged-splitfuse-nz"},{"graph","batched-whole-round"}},{{"targets",{"qwen3_moe","qwen3_5","qwen3_5_moe"}},{"spec_methods",{"none","dflash","eagle3-profile-dependent"}},{"attention","aclnn-nd-reference"},{"graph","sequential-single-row"}}};
+#endif
       std::cout<<out.dump()<<std::endl;return 0;
     }
     fe::require(argc>=3,"用法：flashengine-native 命令 BUNDLE [选项]；查看 --help 或 capabilities");
-    std::string command=argv[1];fe::Bundle bundle(argv[2]);fe::Tokenizer tokenizer(bundle.root);
+    std::string command=argv[1];fe::startup_trace("开始校验并映射 bundle");fe::Bundle bundle(argv[2]);fe::startup_trace("bundle 校验完成；开始准备 tokenizer");fe::Tokenizer tokenizer(bundle.root);
     tokenizer.verify_golden(fe::read_json(bundle.path("golden/tokenizer_chat.json")));
+    fe::startup_trace("tokenizer 校验完成");
     if(command=="verify"){std::cout<<fe::Json{{"verified",true},{"contract_version",fe::contract_version},{"target_tensors",bundle.target_weights.size()},{"draft_tensors",bundle.draft_weights.size()}}.dump()<<std::endl;return 0;}
     fe::require(!fe::fs::exists(bundle.root/"INCOMPLETE.json"),"bundle 尚未打包完成");
     if(command=="tokenize"){fe::require(argc>=4,"需要输入文本");auto ids=tokenizer.encode(argv[3]);std::cout<<fe::Json{{"token_ids",ids},{"decoded",tokenizer.decode(ids,false)}}.dump()<<std::endl;return 0;}

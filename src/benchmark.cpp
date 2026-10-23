@@ -1,4 +1,5 @@
 #include "fe/benchmark.hpp"
+#include "fe/startup_trace.hpp"
 #include <algorithm>
 #include <chrono>
 #include <iostream>
@@ -40,11 +41,11 @@ Json group(DeviceModel& model,Scheduler& scheduler,const Config& config,const Js
 int run_benchmark_cli(const Bundle& bundle,int argc,char** argv,const std::string& backend,const DeviceFactory& factory){
   Options options;for(int j=3;j<argc;++j){std::string flag=argv[j];auto value=[&](){require(j+1<argc,"基准选项缺少值");return std::string(argv[++j]);};if(flag=="--workload")options.workload=value();else if(flag=="--batch-size")options.batch=parse_integer(value());else if(flag=="--warmup")options.warmup=parse_integer(value());else if(flag=="--repeats")options.repeats=parse_integer(value());else if(flag=="--graph")options.graph=true;else if(flag=="--eager")options.graph=false;else if(flag=="--trace-rounds")options.trace=true;else throw InputError("未知基准参数："+flag);}
   require(!options.workload.empty()&&options.batch>0&&options.warmup>=0&&options.repeats>0,"非法基准配置");auto workload=read_json(options.workload);auto config=config_from(workload,bundle,backend,options.graph);require(options.batch<=config.max_num_seqs,"batch-size 超过 max_num_seqs");
-  auto model=factory(bundle,config);Scheduler scheduler(config);bind_model(scheduler,*model);auto& requests=workload.at("requests");auto warm=Json::array();for(size_t j=0;j<std::min(size_t(options.batch),requests.size());++j)warm.push_back(requests[j]);uint64_t next=0;
+  startup_trace("开始构造设备模型");auto model=factory(bundle,config);startup_trace("设备模型就绪；开始 benchmark 预热");Scheduler scheduler(config);bind_model(scheduler,*model);auto& requests=workload.at("requests");auto warm=Json::array();for(size_t j=0;j<std::min(size_t(options.batch),requests.size());++j)warm.push_back(requests[j]);uint64_t next=0;
   for(int j=0;j<options.warmup;++j)group(*model,scheduler,config,warm,next,false,-1);
-  auto before=model->snapshot();auto start=Clock::now();double begin=unix_time();Json rows=Json::array();double request_wall=0;uint64_t preemptions=0;
+  startup_trace("预热完成；开始主跑计时");auto before=model->snapshot();auto start=Clock::now();double begin=unix_time();Json rows=Json::array();double request_wall=0;uint64_t preemptions=0;
   for(int rep=0;rep<options.repeats;++rep)for(size_t offset=0;offset<requests.size();offset+=options.batch){auto part=Json::array();for(size_t j=offset;j<std::min(offset+options.batch,requests.size());++j)part.push_back(requests[j]);auto result=group(*model,scheduler,config,part,next,options.trace,rep);request_wall+=result["wall_seconds"].get<double>();preemptions+=result["preemptions"].get<uint64_t>();for(auto& row:result["rows"])rows.push_back(std::move(row));}
-  double wall=seconds(start),end=unix_time();std::vector<double> ttft;uint64_t total=0;for(auto& row:rows){total+=row["token_ids"].size();ttft.push_back(row["ttft_seconds"].get<double>()*1000);}
+  double wall=seconds(start),end=unix_time();startup_trace("主跑计时结束");std::vector<double> ttft;uint64_t total=0;for(auto& row:rows){total+=row["token_ids"].size();ttft.push_back(row["ttft_seconds"].get<double>()*1000);}
   Json result{{"implementation","cpp"},{"protocol","pretokenized-grouped-engine-v1"},{"workload_sha256",sha256(options.workload)},{"resolved_config",config.json()},{"batch_size",options.batch},{"warmup",options.warmup},{"repeats",options.repeats},{"trace_rounds",options.trace},{"measurement_unix_start",begin},{"measurement_unix_end",end},{"wall_seconds",wall},{"group_wall_seconds_sum",request_wall},{"output_tokens",total},{"output_tps",total/wall},{"ttft_p50_ms",percentile(ttft,50)},{"ttft_p95_ms",percentile(ttft,95)},{"preemptions",preemptions},{"runtime_before",before},{"runtime_after",model->snapshot()},{"rows",rows}};
   result["scheduler"]=scheduler.snapshot();std::cout<<result.dump()<<std::endl;return 0;
 }

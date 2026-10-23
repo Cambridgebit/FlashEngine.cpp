@@ -52,7 +52,8 @@ int main(int argc,char** argv){try{
   auto cancel=std::make_shared<fe::Sequence>(2,std::vector<int64_t>{1},3);sched.add(cancel);cancel->cancelled->store(true);check(sched.reap_cancelled().size()==1&&sched.empty());
   auto capped=std::make_shared<fe::Sequence>(3,std::vector<int64_t>(63,1),4);fe::Config c=config;c.num_kvcache_blocks=5;fe::Scheduler cap(c);cap.add(capped);cap.commit(capped,{2,3,4});check(capped->tokens.size()==64&&capped->finish_reason=="length");
   // 用极小 KV 池强制抢占，确保请求不会因恢复而丢输出或永久饥饿。
-  c=config;c.max_num_seqs=4;c.max_num_batched_tokens=7;c.max_num_partial_prefills=2;fe::Scheduler pressure(c);std::vector<fe::Seq> requests;
+  // 相同 prompt 的 Prefix 共享会消除内存压力；此夹具显式关闭缓存以强制抢占。
+  c=config;c.enable_prefix_cache=false;c.max_num_seqs=4;c.max_num_batched_tokens=7;c.max_num_partial_prefills=2;fe::Scheduler pressure(c);std::vector<fe::Seq> requests;
   for(int id=0;id<8;++id){auto seq=std::make_shared<fe::Sequence>(10+id,std::vector<int64_t>(33,1),3);requests.push_back(seq);pressure.add(seq);}
   int steps=0;while(!pressure.empty()&&++steps<2000){auto batch=pressure.schedule();for(auto& seq:batch.sequences){if(batch.prefill)seq->cached+=seq->scheduled;bool complete=!batch.prefill||seq->cached==seq->tokens.size();if(complete)pressure.commit(seq,{7});if(complete&&seq->status!=fe::Status::finished)seq->cached=seq->tokens.size()-1;seq->scheduled=0;}}
   check(pressure.empty()&&pressure.preemptions>0&&pressure.blocks.used()==0);for(auto& seq:requests)check(seq->tokens.size()==36&&seq->finish_reason=="length");

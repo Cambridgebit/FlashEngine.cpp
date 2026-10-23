@@ -1,4 +1,8 @@
-# 原生 CUDA 基准与严格验收
+# 原生基准与严格验收
+
+310P1 Qwen3-8B / DFlash 的 Python 对齐、整轮 Graph 和首次/热态计时见 [2026-10-20 报告](ASCEND310P_PYTHON_PARITY_20261020.md)。原生首次请求中发生的长度相关执行计划准备仍计入首遍，热态单独统计；不能只挑较快的一遍替换总墙钟。
+
+310P1 的真实 Qwen3-8B + DFlash Graph 单轮记录见 [2026-10-19 板端报告](ASCEND310P_GRAPH_BENCHMARK_20261019.md)。以下 CUDA 历史结果及边界保持原样。
 
 本程序是 C++20 部署实现，不在部署进程内加载 Python。Python 只在开发验收机生成冻结 token workload、oracle 和对比报告。基准结果不自动授予 production。
 

@@ -1,7 +1,8 @@
-// 无 ATen/TorchNPU 的 ACLNN 参考执行。所有新组合本轮仅源码对齐，未经编译/真机验收。
+// 纯原生 Ascend 入口：Qwen3 使用 ATB 批量路径，其余组合保留 ACLNN 参考执行。
 #include "fe/model.hpp"
 #include "ascend_net.hpp"
 #include <set>
+#include "ascend_qwen3.hpp"
 
 namespace fe { namespace {
 using namespace ascend;
@@ -99,8 +100,8 @@ public:
       if(eagle_){private_pages_=(config.max_model_len+config.kvcache_block_size-1)/config.kvcache_block_size;draft_config_.num_kvcache_blocks=private_pages_*config.max_num_seqs;draft_config_.validate();aux_layers_=dc.at("aux_layers").get<std::vector<int>>();}else for(int id:dc.at("target_layer_ids").get<std::vector<int>>())aux_layers_.push_back(id+1);
       draft_=std::make_unique<Net>(bundle.draft_weights,dc,draft_config_,target_->embed,target_->head);projection_=std::make_unique<Projection>(*draft_,target_->h*aux_layers_.size());
     }
-    target_row_=std::make_unique<Entry>(*target_,config_,1,false,aux_layers_);if(!config.enforce_eager)target_row_->capture(config_,runtime_.stream);
-    if(draft_){auto entry=std::make_unique<Entry>(*draft_,draft_config_,eagle_?1:k_+1,!eagle_,std::vector<int>{});if(!config.enforce_eager)entry->capture(draft_config_,runtime_.stream);if(eagle_)draft_row_=std::move(entry);else draft_block_=std::move(entry);}
+    startup_trace("开始准备 target 单行执行计划");target_row_=std::make_unique<Entry>(*target_,config_,1,false,aux_layers_);startup_trace("target 单行执行计划就绪");if(!config.enforce_eager){startup_trace("开始捕获 target Graph");target_row_->capture(config_,runtime_.stream);startup_trace("target Graph 捕获完成");}
+    if(draft_){startup_trace("开始准备 draft 执行计划");auto entry=std::make_unique<Entry>(*draft_,draft_config_,eagle_?1:k_+1,!eagle_,std::vector<int>{});if(!config.enforce_eager)entry->capture(draft_config_,runtime_.stream);if(eagle_)draft_row_=std::move(entry);else draft_block_=std::move(entry);startup_trace("draft 执行计划就绪");}
   }
   ~AscendModel()override{runtime_.enter();aclrtSynchronizeStream(runtime_.stream);}
   ModelOutput run(const Batch& batch)override{
@@ -113,5 +114,10 @@ public:
   Json snapshot()const override{return {{"backend","ascend310p"},{"attention","aclnn-nd-reference"},{"maturity","source-prepared-unvalidated"},{"target_profile",target_->config.at("model_type")},{"spec_method",eagle_?"eagle3":draft_?"dflash":"none"},{"quantization",target_->config.value("quantization",std::string("none"))},{"quantized_compute",false},{"decode_graph_replays",decode_},{"draft_graph_replays",draft_replays_},{"verify_graph_replays",verify_},{"eager_rounds",eager_},{"draft_projected_tokens",projected_},{"eagle_prefix_rebuilt_tokens",rebuilt_},{"eagle_active_requests",eagle_?requests_.size():0},{"eagle_kv_active_requests",eagle_?requests_.size():0},{"recurrent_active_requests",target_->recurrent()?requests_.size():0},{"prefix_state",prefix_.snapshot()},{"graph_buckets",config_.enforce_eager?std::vector<int>{}:std::vector<int>{1}},{"graph_execution","sequential-single-row"}};}
 };
 }
-std::unique_ptr<DeviceModel> create_ascend_model(const Bundle& bundle,const Config& config){return std::make_unique<AscendModel>(bundle,config);}
+std::unique_ptr<DeviceModel> create_ascend_model(const Bundle& bundle,const Config& config){
+  const auto& target=bundle.config.at("target");const auto& draft=bundle.config.at("draft");
+  bool block=draft.is_null()||draft.value("spec_method",std::string("dflash"))=="dflash";
+  if(target.at("model_type")=="qwen3"&&block)return std::make_unique<ascend::QwenAscendModel>(bundle,config);
+  return std::make_unique<AscendModel>(bundle,config);
+}
 }

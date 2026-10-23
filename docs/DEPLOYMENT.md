@@ -1,6 +1,6 @@
 # x86_64 / AArch64 原生部署手册
 
-状态：2026-10-17，candidate。部署进程为 C++，不启动 Python、Triton、Rust tokenizer 或 Python JIT。Python 只用于另一台开发机上的打包、oracle、验收与证据归档。**源码准备、SDK 编译通过、真机正确性通过、production 是四个不同状态。**
+状态：2026-10-20，candidate。部署进程为 C++，不启动 Python、Triton、Rust tokenizer 或 Python JIT。Python 只用于开发验收环境的打包、oracle、验收与证据归档。**源码准备、SDK 编译通过、真机正确性通过、production 是四个不同状态。**
 
 ## 1. 选择部署物
 
@@ -9,13 +9,13 @@
 | CUDA | Linux x86_64 + NVIDIA；Windows 使用 WSL2 | LibTorch C++、预编译 CUDA kernels、FlashInfer 原生 paged attention、CUDA Graph | WSL + RTX 4070 实跑；部分真实模型严格差分仍失败，未获 production 资格 |
 | CUDA | Linux AArch64 + NVIDIA | 同一源码，在目标架构原生构建 | 需要匹配的 AArch64 LibTorch/CUDA；尚未编译或真机验收 |
 | CoreX | Linux + Iluvatar，主机架构必须与厂商 SDK/LibTorch 一致 | 厂商 LibTorch C++、固定形状 ATen paged reference、兼容 Graph | 参考算子已在 NVIDIA 回归；**未取得 CoreX SDK，未在 CoreX 编译/运行** |
-| Ascend 310P | 首选 Linux AArch64 + 310P；x86_64 仅在厂商提供相应 SDK/驱动时适用 | AscendCL、公开 ACLNN、ACL Graph；不链接 TorchNPU | **未取得 SDK/板卡，源码待编译、待真机验收** |
+| Ascend 310P | Linux AArch64 + 310P1；x86_64 仍须对应 SDK/驱动实测 | AscendCL、公开 ACLNN/ATB、ACL Graph；不链接 TorchNPU | 已在 CANN 9.0.T3 / ATB 9.0.0 构建；Qwen3-8B / DFlash 范围见 [真机对齐报告](ASCEND310P_PYTHON_PARITY_20261020.md)，其余 profile 未随之验收 |
 
 运行 `flashengine-native capabilities` 查看二进制实际编译后端。一个 ELF 只链接一个设备运行时，不能用 `--backend` 把 CUDA 程序切成 CoreX/310P 程序。主机 preset 只能校验 bundle/tokenizer，不能进行 CPU 推理。x86_64 ELF 不能复制到 AArch64 直接运行；bundle 是架构无关的数据，可以复用。
 
-0.4 增量见 [功能组合](FEATURE_COMBINATIONS.md)：Qwen3 dense/MoE 可组合 DFlash/EAGLE3，Qwen3.5 文本 dense/MoE 可组合 DFlash；Prefix 默认开启，可与这些草稿组合，使用状态门控/快照恢复。本轮为 310P 补充这些 profile 和 Quark 加载期反量化的 ACLNN 参考源码，并补齐公共 chunked-prefill 配置；**只改代码，没有构建/测试，原有二进制未更新**，见 [源码对齐说明](BACKEND_PARITY_SOURCE.md)。共同约束为 TP=1、greedy；DFlash1 固定 k、全词表、非因果全注意力。仍拒绝 TP>1、DSpark、DFlash2、Qwen3.5+EAGLE3、滑窗草稿和未实现的量化格式；Python 支持不代表原生已验收。
+0.4 增量见 [功能组合](FEATURE_COMBINATIONS.md)：Qwen3 dense/MoE 可组合 DFlash/EAGLE3，Qwen3.5 文本 dense/MoE 可组合 DFlash；Prefix 默认开启，可与这些草稿组合，使用状态门控/快照恢复。2026-10-17 源码轮为 310P 补充了这些 profile 和 Quark 加载期反量化的 ACLNN 参考源码，以及公共 chunked-prefill 配置；当时只改代码、没有构建/测试，见 [历史源码说明](BACKEND_PARITY_SOURCE.md)。2026-10-20 的 Qwen3 dense / DFlash 实机范围另见本轮报告，不覆盖其他组合。共同约束为 TP=1、greedy；DFlash1 固定 k、全词表、非因果全注意力。仍拒绝 TP>1、DSpark、DFlash2、Qwen3.5+EAGLE3、滑窗草稿和未实现的量化格式；Python 支持不代表原生已验收。
 
-Qwen3 CUDA FlashInfer 和 CoreX 共用模型层使用 head_dim=128；Qwen3.5 与 310P 使用独立参考 attention。计算为 fp16/bf16；310P 只接受 fp16，GDN SSM 采用 fp32。MoE 支持逐专家及融合 3D 权重、mixed dense/sparse 层、top-k 路由；Qwen3.5 另有门控 shared expert。所有专家驻留设备，不提供专家卸载；30B 模型不能因只激活 3B 就按 3B 权重预算显存。
+Qwen3 CUDA FlashInfer 和 CoreX 共用模型层使用 head_dim=128。310P Qwen3 dense 普通 / DFlash 为 ATB/NZ 路径，其余 profile 保留独立参考 attention。计算为 fp16/bf16；310P 只接受 fp16，GDN SSM 采用 fp32。MoE 支持逐专家及融合 3D 权重、mixed dense/sparse 层、top-k 路由；Qwen3.5 另有门控 shared expert。所有专家驻留设备，不提供专家卸载；30B 模型不能因只激活 3B 就按 3B 权重预算显存。
 
 ## 2. 准备离线输入
 
@@ -104,8 +104,11 @@ build/corex/flashengine-native capabilities
 
 ```bash
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
+source /usr/local/Ascend/nnal/atb/9.0.0/atb/set_env.sh
 cmake --preset ascend310p \
-  -DFE_ASCEND_ROOT=/usr/local/Ascend/ascend-toolkit/latest
+  -DFE_ASCEND_ROOT=/usr/local/Ascend/ascend-toolkit/latest \
+  -DFE_ATB_ROOT=/usr/local/Ascend/nnal/atb/9.0.0/atb/cxx_abi_1 \
+  -DFE_DEVICE_TESTS=ON
 cmake --build --preset ascend310p -j2
 ctest --test-dir build/ascend310p --output-on-failure
 build/ascend310p/flashengine-native capabilities
@@ -113,7 +116,7 @@ build/ascend310p/flashengine-native capabilities
 
 此 preset 不需要 LibTorch、TorchNPU 或 Python。CMake 检查全部 ACLNN 头文件的调用原型，以及公开 ACL Graph 和 executor 复用/销毁符号；缺失直接报错。版本号本身不够：必须确认这些 API 和所用算子在 **310P** 上可执行，而不是只在 910 上存在。当前未给出已验收的最低 CANN 版本。
 
-实现使用 AscendCL 管理内存/context/stream，ACLNN 两阶段 planner 在图外运行并保留 executor/workspace，ACL Graph 捕获固定执行程序。参考布局为 **ND KV**，不是原方案中待优化的 ATB/NZ 路径；还没有实现 ATB paged attention / NZ 高性能模型组合。它只能作为真机移植起点，不代表已完成 310P 性能方案。算子缺失/不支持、Graph 捕获失败、执行错误均明确失败，不回退 Python 或 TorchNPU 私有符号。
+实现使用 AscendCL 管理内存/context/stream，ACLNN / ATB 一阶段准备在图外运行并保留 executor、operation、context 和 workspace。Qwen3 dense 普通 / DFlash 使用 NZ 权重、NZ KV、ATB Flash/Paged/SplitFuse、批量 verify 和整轮 ACL Graph；其他 profile 保留 ND KV 参考实现。当前图捕获失败会告警并回退同构 eager，实际算子执行错误仍 fail-fast；不回退 Python 或 TorchNPU 私有符号。C++ ATB 必须选择与本构建一致的 ABI=1，不能仅根据 Python 扩展的 ABI 选库。
 
 公开 API 依据：[ACL Graph](https://www.hiascend.com/doc_center/source/en/CANNCommunityEdition/910/API/runtimeapi/aclcppdevg_03_1782.html)、[可复用 executor](https://www.hiascend.com/doc_center/source/en/canncommercial/850/API/aolapi/operatorlist_00041.html)。这两份 API 文档不能代替 310P 产品支持和真机结果。
 
@@ -132,7 +135,7 @@ FE_NATIVE=build/cuda/flashengine-native
   --max-num-partial-prefills 2 --kv-blocks 32 --graph --no-think
 ```
 
-初次真机验收先 `--eager`，普通路径通过后再 `--graph`，然后 spec eager → spec Graph。CUDA/CoreX Qwen3 捕获 1/2/4/8、16 步进和 `max_num_seqs` 尾桶；Qwen3.5 与新 310P 参考路径的 target 使用固定单行顺序图，DFlash 草稿使用固定块图。任一要求的图失败即拒绝启动。plan、附属状态快照、接受/回滚和上下文提交在图外；上下文尾部走单 token 路径是计划内行为。`--production` 仅禁止 eager 配置，不等于已获 production 资格。
+初次真机验收先 `--eager`，普通路径通过后再 `--graph`，然后 spec eager → spec Graph。CUDA/CoreX Qwen3 和 310P 优化 Qwen3 路径按 1/2/4/8、16 步进及 `max_num_seqs` 尾桶执行；310P DFlash 将设备接受和上下文投影捕获进整轮图。Qwen3.5 与其他 310P 参考 profile 仍使用单行顺序 target 图。上下文尾部走单 token 路径是计划内行为；实际图模式与回放计数须从 runtime 验证。`--production` 仅禁止 eager 配置，不等于已获 production 资格。
 
 Prefix 和分块预填充均默认开启；`--enable-chunked-prefill` / `--disable-chunked-prefill` 与 Python 对齐。`--max-num-batched-tokens` 是每步 prefill token 预算，`--max-num-partial-prefills` 限制持有状态的 partial prefill；它们计入 max_num_seqs。关闭分块时预算必须覆盖 max_model_len。workload JSON 的 `enable_chunked_prefill` 也会被实际读取。
 
@@ -150,7 +153,7 @@ curl http://127.0.0.1:8000/metrics
 
 ## 8. 容量、观测与故障
 
-`--kv-blocks` 为可分配页数，`--kv-block-size` 默认 256；额外 dummy 页不分配给请求。KV 字节近似为：
+`--kv-blocks` 为可分配页数，`--kv-block-size` 默认 256；310P 优化路径须显式使用 64 或 128，并满足 `block_size * head_dim <= 16384`，8B 示例传 128。额外 dummy 页不分配给请求。KV 字节近似为：
 
 `2(K/V) × layers × (blocks+1) × block_size × kv_heads × head_dim × dtype_bytes`。
 
